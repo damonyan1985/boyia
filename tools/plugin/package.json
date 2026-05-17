@@ -1,0 +1,154 @@
+{
+	"name": "boyia-ide",
+	"publisher": "BoyiaIDE",
+	"displayNveame": "Boyia IDE",
+	"description": "Boyia IDE",
+	"version": "0.0.7",
+	"repository": {
+		"url": ""
+	},
+	"engines": {
+		"vscode": "^1.36.0"
+	},
+	"icon": "icon/icon.png",
+	"categories": [
+		"Other"
+	],
+	"activationEvents": [
+		"*"
+	],
+	"main": "./dist/extension.js",
+	"contributes": {
+		"snippets": [
+			{
+				"language": "boyia",
+				"path": "./config/snippets.json"
+			}
+		],
+		"languages": [
+			{
+				"id": "boyia",
+				"extensions": [
+					".boyia"
+				],
+				"configuration": "./language/language.json"
+			}
+		],
+		"grammars": [
+			{
+				"language": "boyia",
+				"scopeName": "source.boyia",
+				"path": "./syntaxes/boyia.tmLanguage.json"
+			}
+		],
+		"commands": [
+			{
+				"command": "extension.helloWorld",
+				"title": "Hello World"
+			}
+		],
+		"configurationDefaults": {
+			"[boyia]": {
+				"editor.quickSuggestions": {
+					"other": true,
+					"comments": false,
+					"strings": false
+				},
+				"editor.bracketPairColorization.enabled": true,
+				"editor.guides.bracketPairs": "active",
+				"editor.tokenColorCustomizations": {
+					"textMateRules": [
+						{
+							"scope": [
+								"variable.other.readwrite.boyia"
+							],
+							"settings": {
+								"foreground": "#9CDCFE"
+							}
+						},
+						{
+							"scope": [
+								"variable.parameter.boyia"
+							],
+							"settings": {
+								"foreground": "#9CDCFE"
+							}
+						},
+						{
+							"scope": [
+								"entity.name.function.boyia"
+							],
+							"settings": {
+								"foreground": "#DCDCAA"
+							}
+						},
+						{
+							"scope": [
+								"entity.name.type.class.boyia",
+								"entity.other.inherited-class.boyia"
+							],
+							"settings": {
+								"foreground": "#4EC9B0"
+							}
+						},
+						{
+							"scope": [
+								"punctuation.definition.block.boyia"
+							],
+							"settings": {
+								"foreground": "#FFD700"
+							}
+						},
+						{
+							"scope": [
+								"meta.brace.square.boyia"
+							],
+							"settings": {
+								"foreground": "#C586C0"
+							}
+						},
+						{
+							"scope": [
+								"punctuation.definition.parameters.begin.boyia",
+								"punctuation.definition.parameters.end.boyia",
+								"punctuation.definition.arguments.begin.boyia",
+								"punctuation.definition.arguments.end.boyia"
+							],
+							"settings": {
+								"foreground": "#CE9178"
+							}
+						}
+					]
+				}
+			}
+		}
+	},
+	"scripts": {
+		"test": "node ./test/runTest.js",
+		"sync-theme-defaults": "node ./scripts/sync-package-json-theme.js",
+		"prebuild": "npm run sync-theme-defaults",
+		"build": "webpack --mode production"
+	},
+	"devDependencies": {
+		"@types/glob": "^7.1.1",
+		"@types/mocha": "^5.2.6",
+		"@types/node": "^10.12.21",
+		"@types/vscode": "^1.66.0",
+		"@vscode/debugadapter": "1.56.0",
+		"eslint": "^5.13.0",
+		"glob": "^7.1.4",
+		"mocha": "^6.1.4",
+		"typescript": "^3.3.1",
+		"vscode": "^1.1.36",
+		"vscode-test": "^1.0.2",
+		"webpack": "^4.39.1",
+		"webpack-cli": "^3.3.6"
+	},
+	"dependencies": {
+		"babel-core": "^6.26.3",
+		"babel-loader": "^7.1.5",
+		"events": "^3.3.0",
+		"fs-extra": "^8.1.0",
+		"ws": "^8.18.1"
+	}
+}

@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/boyia_types",
+    "crates/boyia_gc",
+    "crates/boyia_memory",
+    "crates/boyia_vm",
+    "crates/boyia_builtins",
+    "crates/boyia_lib",
+    "crates/boyia_runtime",
+    "examples/boyia_cli",
+]

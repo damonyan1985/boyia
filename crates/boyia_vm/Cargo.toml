@@ -1,0 +1,12 @@
+[package]
+name = "boyia_vm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "boyia_vm"
+crate-type = ["rlib"]
+
+[dependencies]
+boyia_memory = { path = "../boyia_memory" }
+boyia_types = { path = "../boyia_types" }
