@@ -1,0 +1,3 @@
+{
+  "boyia.languageServerPath": "${workspaceFolder}/target/debug/boyia_lsp.exe"
+}

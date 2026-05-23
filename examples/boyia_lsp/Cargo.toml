@@ -1,0 +1,13 @@
+[package]
+name = "boyia_lsp"
+version = "0.1.0"
+edition = "2021"
+description = "Language Server Protocol server for Boyia (.boyia)"
+
+[[bin]]
+name = "boyia_lsp"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std"] }
+tower-lsp = "0.20"

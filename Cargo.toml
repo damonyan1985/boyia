@@ -9,4 +9,5 @@ members = [
     "crates/boyia_lib",
     "crates/boyia_runtime",
     "examples/boyia_cli",
+    "examples/boyia_lsp",
 ]
