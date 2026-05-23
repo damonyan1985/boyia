@@ -20,3 +20,9 @@ Boyia language is a rust only OOP program language engine, which is chinese owne
 2. 支持面向对象开发，支持class定义，继承等OOP基础语法。
 3. 支持异步开发模式，Cli中已加入https，file，zip等原生异步接口
 
+## Docs
+
+Boyia 开发文档，包含语法入门、类与继承、属性/属性方法、Rust 原生扩展（Builtins/Native）以及 async/await 异步机制示例。
+
+- [Boyia Language Development](tools/docs/boyia_language_development.md)
+
