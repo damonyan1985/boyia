@@ -112,6 +112,16 @@ impl<'a> Parser<'a> {
     fn parse_fun_decl(&mut self, kind: FunKind, start: Span) -> FunDecl {
         self.advance(); // fun / already consumed async+fun in prop
         let (name, name_span) = self.expect_ident("function name");
+        self.parse_fun_decl_after_name(kind, start, name, name_span)
+    }
+
+    fn parse_fun_decl_after_name(
+        &mut self,
+        kind: FunKind,
+        start: Span,
+        name: String,
+        name_span: Span,
+    ) -> FunDecl {
         let params = self.parse_param_list();
         let body = self.parse_block_body();
         let body_span = body.span;
@@ -123,6 +133,48 @@ impl<'a> Parser<'a> {
             kind,
             span: start.merge(body_span),
         }
+    }
+
+    fn parse_async_decl_after_async(&mut self, kind: FunKind, start: Span) -> Option<FunDecl> {
+        if self.current().is_keyword(Keyword::Fun) {
+            return Some(self.parse_fun_decl(kind, start));
+        }
+        if self.current().is_ident() {
+            let (name, name_span) = self.expect_ident("async function name");
+            return Some(self.parse_fun_decl_after_name(kind, start, name, name_span));
+        }
+        self.error(
+            "function name or 'fun' expected after 'async'",
+            self.current_span(),
+        );
+        self.skip_statement();
+        None
+    }
+
+    fn parse_prop_async_method(&mut self, start: Span) -> Option<FunDecl> {
+        if self.current().is_keyword(Keyword::Fun) {
+            self.error(
+                "'fun' is not allowed after 'prop async'; use 'prop async name(...)'",
+                self.current_span(),
+            );
+            self.skip_statement();
+            return None;
+        }
+        if self.current().is_ident() {
+            let (name, name_span) = self.expect_ident("prop async method name");
+            return Some(self.parse_fun_decl_after_name(
+                FunKind::AsyncPropMethod,
+                start,
+                name,
+                name_span,
+            ));
+        }
+        self.error(
+            "method name expected after 'prop async'",
+            self.current_span(),
+        );
+        self.skip_statement();
+        None
     }
 
     fn parse_class_decl(&mut self, start: Span) -> ClassDecl {
@@ -171,12 +223,9 @@ impl<'a> Parser<'a> {
                 }
                 if self.current().is_keyword(Keyword::Async) {
                     self.advance();
-                    if self.current().is_keyword(Keyword::Fun) {
-                        let fun = self.parse_fun_decl(FunKind::AsyncPropMethod, start);
+                    if let Some(fun) = self.parse_prop_async_method(start) {
                         return Some(ClassMember::Method(fun));
                     }
-                    self.error("'fun' expected after 'prop async'", self.current_span());
-                    self.skip_statement();
                     return None;
                 }
                 if self.current().is_ident() {
@@ -201,14 +250,8 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Keyword(Keyword::Async) => {
                 self.advance();
-                if self.current().is_keyword(Keyword::Fun) {
-                    let fun = self.parse_fun_decl(FunKind::AsyncPropMethod, start);
-                    Some(ClassMember::Method(fun))
-                } else {
-                    self.error("'fun' expected after 'async'", self.current_span());
-                    self.skip_statement();
-                    None
-                }
+                self.parse_async_decl_after_async(FunKind::AsyncMethod, start)
+                    .map(ClassMember::Method)
             }
             TokenKind::Keyword(Keyword::Var) => {
                 // var inside class body — treat as statement, not member decl
@@ -258,14 +301,8 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Keyword(Keyword::Async) => {
                 self.advance();
-                if self.current().is_keyword(Keyword::Fun) {
-                    let fun = self.parse_fun_decl(FunKind::AsyncFunction, start);
-                    Some(Stmt::FunDecl(fun))
-                } else {
-                    self.error("'fun' expected after 'async'", self.current_span());
-                    self.skip_statement();
-                    None
-                }
+                self.parse_async_decl_after_async(FunKind::AsyncFunction, start)
+                    .map(Stmt::FunDecl)
             }
             TokenKind::Keyword(Keyword::Return) => {
                 self.advance();
@@ -743,5 +780,38 @@ class Printer {
         let src = "var x = 1\nclass A {}";
         let result = parse(src);
         assert!(result.errors.iter().any(|e| e.message.contains("semicolon")));
+    }
+
+    #[test]
+    fn parse_prop_async_without_fun() {
+        let src = r#"
+class Service {
+    prop async loadAsync(url) {
+        return url;
+    }
+};
+"#;
+        let result = parse(src);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+    }
+
+    #[test]
+    fn reject_prop_async_with_fun() {
+        let src = r#"
+class Service {
+    prop async fun loadAsync(url) {
+        return url;
+    }
+};
+"#;
+        let result = parse(src);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("not allowed after 'prop async'")),
+            "{:?}",
+            result.errors
+        );
     }
 }

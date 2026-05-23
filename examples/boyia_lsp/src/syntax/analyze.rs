@@ -105,6 +105,7 @@ fn fun_symbol(fun: &FunDecl, kind: SymbolKind, container: Option<String>) -> Sym
         FunKind::Function => "function",
         FunKind::AsyncFunction => "async function",
         FunKind::Method => "method",
+        FunKind::AsyncMethod => "async method",
         FunKind::PropMethod => "prop method",
         FunKind::AsyncPropMethod => "prop async method",
     };

@@ -31,6 +31,7 @@ pub enum FunKind {
     Function,
     AsyncFunction,
     Method,
+    AsyncMethod,
     PropMethod,
     AsyncPropMethod,
 }
