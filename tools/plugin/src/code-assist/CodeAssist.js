@@ -1,5 +1,6 @@
 const vscode = require('vscode');
 const fs = require('fs');
+const path = require('path');
 const CodeUtil = require('../code-util/CodeUtil');
 const CodeGlobal = require('../code-global/CodeGlobal');
 const CodeRegistry = require('./CodeRegistry');
@@ -20,6 +21,526 @@ const BUILTIN_GLOBAL_CLASSES = [
 ];
 
 class CodeAssist {
+  /**
+   * @param {string} value
+   */
+  static escapeRegExp(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  /**
+   * Prefer nearest definition before cursor; fallback to earliest.
+   * @param {number[]} offsets
+   * @param {number} cursorOffset
+   * @returns {number}
+   */
+  static pickBestOffset(offsets, cursorOffset) {
+    if (!offsets.length) {
+      return -1;
+    }
+    const before = offsets.filter((o) => o <= cursorOffset);
+    if (before.length) {
+      return Math.max.apply(null, before);
+    }
+    return Math.min.apply(null, offsets);
+  }
+
+  /**
+   * @param {string} text
+   * @param {RegExp} re
+   * @param {string} name
+   * @returns {number[]}
+   */
+  static collectNameOffsets(text, re, name) {
+    /** @type {number[]} */
+    const out = [];
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const idxInMatch = m[0].indexOf(name);
+      if (idxInMatch >= 0) {
+        out.push(m.index + idxInMatch);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * @param {vscode.TextDocument} document
+   * @param {number} startOffset
+   * @param {number} length
+   * @returns {vscode.Location}
+   */
+  static locationFromOffset(document, startOffset, length) {
+    const start = document.positionAt(startOffset);
+    const end = document.positionAt(startOffset + length);
+    return new vscode.Location(document.uri, new vscode.Range(start, end));
+  }
+
+  /**
+   * Resolve `require("...")` target under current document directory.
+   * Supports exact path or implicit `.boyia` suffix.
+   * @param {vscode.TextDocument} document
+   * @param {string} requiredPath
+   * @returns {vscode.Location | null}
+   */
+  static resolveRequireTargetLocation(document, requiredPath) {
+    const resolvedPath = CodeAssist.resolveRequireTargetPath(document, requiredPath);
+    if (!resolvedPath) {
+      return null;
+    }
+    const uri = vscode.Uri.file(resolvedPath);
+    return new vscode.Location(uri, new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 0)));
+  }
+
+  /**
+   * Resolve `require("...")` target file path under current document directory.
+   * Supports exact path or implicit `.boyia` suffix.
+   * @param {vscode.TextDocument} document
+   * @param {string} requiredPath
+   * @returns {string | null}
+   */
+  static resolveRequireTargetPath(document, requiredPath) {
+    if (!requiredPath) {
+      return null;
+    }
+    const baseFile = document.uri && document.uri.fsPath ? document.uri.fsPath : '';
+    const baseDir = baseFile ? path.dirname(baseFile) : '';
+    const resolved = path.isAbsolute(requiredPath)
+      ? path.normalize(requiredPath)
+      : path.resolve(baseDir || '.', requiredPath);
+    const candidates = [resolved];
+    if (!resolved.toLowerCase().endsWith('.boyia')) {
+      candidates.push(`${resolved}.boyia`);
+    }
+    for (const filePath of candidates) {
+      try {
+        if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+          return filePath;
+        }
+      } catch (_e) {
+        // Ignore inaccessible or malformed candidate and continue trying.
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Resolve `require("...")` target URI under current document directory.
+   * Supports exact path or implicit `.boyia` suffix.
+   * @param {vscode.TextDocument} document
+   * @param {string} requiredPath
+   * @returns {vscode.Uri | null}
+   */
+  static resolveRequireTargetUri(document, requiredPath) {
+    const resolvedPath = CodeAssist.resolveRequireTargetPath(document, requiredPath);
+    return resolvedPath ? vscode.Uri.file(resolvedPath) : null;
+  }
+
+  /**
+   * Parse all `require("...")` / `require('...')` calls in a document.
+   * @param {string} text
+   * @returns {{ path: string, literalStart: number, literalEnd: number }[]}
+   */
+  static parseRequireCalls(text) {
+    const out = [];
+    const re = /\brequire\s*\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*\)/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const quoted = m[1] || '';
+      if (quoted.length < 2) {
+        continue;
+      }
+      const quote = quoted[0];
+      if ((quote !== '"' && quote !== '\'') || quoted[quoted.length - 1] !== quote) {
+        continue;
+      }
+      const requiredPath = quoted.slice(1, -1);
+      if (!requiredPath) {
+        continue;
+      }
+      const idx = m[0].indexOf(quoted);
+      if (idx < 0) {
+        continue;
+      }
+      const literalStart = m.index + idx;
+      const literalEnd = literalStart + quoted.length;
+      out.push({ path: requiredPath, literalStart, literalEnd });
+    }
+    return out;
+  }
+
+  /**
+   * @param {vscode.TextDocument} document
+   * @returns {string[]}
+   */
+  static requiredFilePaths(document) {
+    const text = document.getText();
+    const requires = CodeAssist.parseRequireCalls(text);
+    const out = [];
+    const seen = new Set();
+    for (const req of requires) {
+      const filePath = CodeAssist.resolveRequireTargetPath(document, req.path);
+      if (filePath && !seen.has(filePath)) {
+        seen.add(filePath);
+        out.push(filePath);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * @param {string} text
+   * @param {number} offset
+   * @returns {vscode.Position}
+   */
+  static positionFromTextOffset(text, offset) {
+    const o = Math.max(0, Math.min(offset, text.length));
+    let line = 0;
+    let character = 0;
+    for (let i = 0; i < o; i++) {
+      if (text.charCodeAt(i) === 10) {
+        line++;
+        character = 0;
+      } else {
+        character++;
+      }
+    }
+    return new vscode.Position(line, character);
+  }
+
+  /**
+   * @param {string} filePath
+   * @param {number} startOffset
+   * @param {number} length
+   * @param {string} text
+   * @returns {vscode.Location}
+   */
+  static locationInFile(filePath, startOffset, length, text) {
+    const start = CodeAssist.positionFromTextOffset(text, startOffset);
+    const end = CodeAssist.positionFromTextOffset(text, startOffset + length);
+    return new vscode.Location(vscode.Uri.file(filePath), new vscode.Range(start, end));
+  }
+
+  /**
+   * @param {string} filePath
+   * @returns {string | null}
+   */
+  static readFileText(filePath) {
+    try {
+      const raw = fs.readFileSync(filePath, 'UTF-8');
+      return raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  /**
+   * @param {string} filePath
+   * @param {string} className
+   * @returns {vscode.Location | null}
+   */
+  static findClassLocationInFile(filePath, className) {
+    const text = CodeAssist.readFileText(filePath);
+    if (!text) {
+      return null;
+    }
+    const safe = CodeAssist.escapeRegExp(className);
+    const re = new RegExp(`\\bclass\\s+(${safe})\\b`, 'g');
+    const m = re.exec(text);
+    if (!m) {
+      return null;
+    }
+    const idx = m[0].indexOf(className);
+    if (idx < 0) {
+      return null;
+    }
+    const startOffset = m.index + idx;
+    return CodeAssist.locationInFile(filePath, startOffset, className.length, text);
+  }
+
+  /**
+   * @param {string} filePath
+   * @param {string} className
+   * @param {string} memberName
+   * @returns {vscode.Location | null}
+   */
+  static findMemberLocationInFile(filePath, className, memberName) {
+    const text = CodeAssist.readFileText(filePath);
+    if (!text) {
+      return null;
+    }
+    const { classes } = CodeIndex.parseDocument(text);
+    const memberOffset = CodeAssist.findMemberOffsetInHierarchy(text, className, memberName, classes);
+    if (memberOffset < 0) {
+      return null;
+    }
+    return CodeAssist.locationInFile(filePath, memberOffset, memberName.length, text);
+  }
+
+  /**
+   * @param {vscode.TextDocument} document
+   * @param {string} className
+   * @returns {vscode.Location[]}
+   */
+  static importedClassLocations(document, className) {
+    const files = CodeAssist.requiredFilePaths(document);
+    for (const filePath of files) {
+      const loc = CodeAssist.findClassLocationInFile(filePath, className);
+      if (loc) {
+        return [loc];
+      }
+    }
+    return [];
+  }
+
+  /**
+   * @param {vscode.TextDocument} document
+   * @param {string} className
+   * @param {string} memberName
+   * @returns {vscode.Location[]}
+   */
+  static importedMemberLocations(document, className, memberName) {
+    const files = CodeAssist.requiredFilePaths(document);
+    for (const filePath of files) {
+      const loc = CodeAssist.findMemberLocationInFile(filePath, className, memberName);
+      if (loc) {
+        return [loc];
+      }
+    }
+    return [];
+  }
+
+  /**
+   * If cursor is within `require("...")` string literal, return target location.
+   * @param {vscode.TextDocument} document
+   * @param {vscode.Position} position
+   * @returns {vscode.Location | null}
+   */
+  static requireDefinitionLocation(document, position) {
+    const text = document.getText();
+    const offset = document.offsetAt(position);
+    const requires = CodeAssist.parseRequireCalls(text);
+    for (const req of requires) {
+      // Support cursor on quote or inside the path content.
+      const start = req.literalStart;
+      const end = req.literalEnd;
+      if (offset >= start && offset <= end) {
+        return CodeAssist.resolveRequireTargetLocation(document, req.path);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Provide clickable links so whole require-string gets underlined.
+   * @param {vscode.TextDocument} document
+   * @returns {vscode.DocumentLink[]}
+   */
+  static provideDocumentLinks(document) {
+    const text = document.getText();
+    const requires = CodeAssist.parseRequireCalls(text);
+    return requires
+      .map(function (req) {
+        const uri = CodeAssist.resolveRequireTargetUri(document, req.path);
+        if (!uri) {
+          return null;
+        }
+        const start = document.positionAt(req.literalStart);
+        const end = document.positionAt(req.literalEnd);
+        return new vscode.DocumentLink(new vscode.Range(start, end), uri);
+      })
+      .filter(function (l) { return l != null; });
+  }
+
+  /**
+   * @param {string} text
+   * @param {string} className
+   * @returns {{ open: number, close: number } | null}
+   */
+  static findClassBlock(text, className) {
+    const safe = CodeAssist.escapeRegExp(className);
+    const re = new RegExp(`\\bclass\\s+${safe}(?:\\s+extends\\s+\\w+)?\\s*\\{`, 'g');
+    const m = re.exec(text);
+    if (!m) {
+      return null;
+    }
+    const open = m.index + m[0].length - 1;
+    const close = CodeIndex.indexOfMatchingBrace(text, open);
+    if (close < 0) {
+      return null;
+    }
+    return { open, close };
+  }
+
+  /**
+   * @param {string} text
+   * @param {string} className
+   * @param {string} memberName
+   * @returns {number}
+   */
+  static findMemberOffsetInClass(text, className, memberName) {
+    const block = CodeAssist.findClassBlock(text, className);
+    if (!block) {
+      return -1;
+    }
+    const bodyStart = block.open + 1;
+    const bodyEnd = block.close;
+    const body = text.slice(bodyStart, bodyEnd);
+    const safe = CodeAssist.escapeRegExp(memberName);
+    const patterns = [
+      new RegExp(`\\bprop\\s+async\\s+fun\\s+(${safe})\\s*\\(`, 'g'),
+      new RegExp(`\\bprop\\s+fun\\s+(${safe})\\s*\\(`, 'g'),
+      new RegExp(`\\bfun\\s+(${safe})\\s*\\(`, 'g'),
+      new RegExp(`\\bprop\\s+(${safe})\\s*[=;]`, 'g'),
+    ];
+    for (const re of patterns) {
+      const m = re.exec(body);
+      if (m) {
+        const idxInMatch = m[0].indexOf(memberName);
+        if (idxInMatch >= 0) {
+          return bodyStart + m.index + idxInMatch;
+        }
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * @param {string} text
+   * @param {string} className
+   * @param {string} memberName
+   * @param {Map<string, { members: Set<string>, extends: string | null }>} classes
+   * @param {Set<string>} visited
+   * @returns {number}
+   */
+  static findMemberOffsetInHierarchy(text, className, memberName, classes, visited = new Set()) {
+    if (!className || visited.has(className)) {
+      return -1;
+    }
+    visited.add(className);
+    const here = CodeAssist.findMemberOffsetInClass(text, className, memberName);
+    if (here >= 0) {
+      return here;
+    }
+    const info = classes.get(className);
+    if (!info || !info.extends) {
+      return -1;
+    }
+    return CodeAssist.findMemberOffsetInHierarchy(text, info.extends, memberName, classes, visited);
+  }
+
+  /**
+   * @param {vscode.TextDocument} document
+   * @param {vscode.Position} position
+   * @param {string} className
+   * @returns {vscode.Location[]}
+   */
+  static classDefinitionLocations(document, position, className) {
+    const text = document.getText();
+    const safe = CodeAssist.escapeRegExp(className);
+    const cursorOffset = document.offsetAt(position);
+    const re = new RegExp(`\\bclass\\s+(${safe})\\b`, 'g');
+    const offsets = CodeAssist.collectNameOffsets(text, re, className);
+    const picked = CodeAssist.pickBestOffset(offsets, cursorOffset);
+    if (picked >= 0) {
+      return [CodeAssist.locationFromOffset(document, picked, className.length)];
+    }
+    return CodeAssist.importedClassLocations(document, className);
+  }
+
+  /**
+   * When the word regex treats `Receiver.member` as one token, split by cursor side of `.`.
+   * @param {vscode.TextDocument} document
+   * @param {vscode.Position} position
+   * @returns {{ receiver: string, member: string, onReceiver: boolean, onMember: boolean } | null}
+   */
+  static dottedTokenAtCursor(document, position) {
+    const wordRange = document.getWordRangeAtPosition(position, /[A-Za-z_][\w.]*/);
+    if (!wordRange) {
+      return null;
+    }
+    const token = document.getText(wordRange);
+    const m = token.match(/^([A-Za-z_]\w*)\.(\w+)$/);
+    if (!m) {
+      return null;
+    }
+    const cursorOffset = document.offsetAt(position);
+    const startOffset = document.offsetAt(wordRange.start);
+    const dotOffset = startOffset + token.indexOf('.');
+    return {
+      receiver: m[1],
+      member: m[2],
+      onReceiver: cursorOffset < dotOffset,
+      onMember: cursorOffset > dotOffset,
+    };
+  }
+
+  /**
+   * @param {vscode.TextDocument} document
+   * @param {vscode.Position} position
+   * @param {string} name
+   * @returns {vscode.Location[]}
+   */
+  static symbolDefinitionLocations(document, position, name) {
+    const text = document.getText();
+    const safe = CodeAssist.escapeRegExp(name);
+    const cursorOffset = document.offsetAt(position);
+    const patterns = [
+      new RegExp(`\\bprop\\s+async\\s+fun\\s+(${safe})\\s*\\(`, 'g'),
+      new RegExp(`\\bprop\\s+fun\\s+(${safe})\\s*\\(`, 'g'),
+      new RegExp(`\\bfun\\s+(${safe})\\s*\\(`, 'g'),
+      new RegExp(`\\bprop\\s+(${safe})\\s*[=;]`, 'g'),
+      new RegExp(`\\bvar\\s+(${safe})\\b`, 'g'),
+    ];
+    /** @type {number[]} */
+    let offsets = [];
+    for (const re of patterns) {
+      offsets = offsets.concat(CodeAssist.collectNameOffsets(text, re, name));
+    }
+    offsets = Array.from(new Set(offsets));
+    const picked = CodeAssist.pickBestOffset(offsets, cursorOffset);
+    if (picked < 0) {
+      return [];
+    }
+    return [CodeAssist.locationFromOffset(document, picked, name.length)];
+  }
+
+  /**
+   * @param {vscode.TextDocument} document
+   * @param {vscode.Position} position
+   * @param {string} receiver
+   * @param {string} memberName
+   * @returns {vscode.Location[]}
+   */
+  static memberDefinitionLocations(document, position, receiver, memberName) {
+    const text = document.getText();
+    const offset = document.offsetAt(position);
+    const { classes } = CodeIndex.parseDocument(text);
+
+    /** @type {string | null} */
+    let cls = null;
+    if (receiver === 'this') {
+      const c = CodeIndex.innermostClassAtOffset(text, offset);
+      cls = c && c.name;
+    } else {
+      const map = CodeIndex.varToClassBeforeOffset(text, offset);
+      cls = map.get(receiver) || null;
+    }
+    if (!cls) {
+      if (receiver !== 'this') {
+        cls = receiver;
+      } else {
+        return [];
+      }
+    }
+
+    const memberOffset = CodeAssist.findMemberOffsetInHierarchy(text, cls, memberName, classes);
+    if (memberOffset < 0) {
+      return CodeAssist.importedMemberLocations(document, cls, memberName);
+    }
+    return [CodeAssist.locationFromOffset(document, memberOffset, memberName.length)];
+  }
+
   /**
    * @param {vscode.CompletionItem} item
    * @returns {string}
@@ -400,6 +921,53 @@ class CodeAssist {
     return null;
   }
 
+  /**
+   * @param {vscode.TextDocument} document
+   * @param {vscode.Position} position
+   * @returns {vscode.Location[] | undefined}
+   */
+  static provideDefinition(document, position) {
+    const requireLocation = CodeAssist.requireDefinitionLocation(document, position);
+    if (requireLocation) {
+      return [requireLocation];
+    }
+
+    const dotted = CodeAssist.dottedTokenAtCursor(document, position);
+    if (dotted) {
+      if (dotted.onReceiver) {
+        const classLocs = CodeAssist.classDefinitionLocations(document, position, dotted.receiver);
+        return classLocs.length ? classLocs : undefined;
+      }
+      if (dotted.onMember) {
+        const memberLocs = CodeAssist.memberDefinitionLocations(
+          document,
+          position,
+          dotted.receiver,
+          dotted.member
+        );
+        return memberLocs.length ? memberLocs : undefined;
+      }
+      return undefined;
+    }
+
+    const wordRange = document.getWordRangeAtPosition(position, /[A-Za-z_][\w.]*/);
+    if (!wordRange) {
+      return undefined;
+    }
+    const token = document.getText(wordRange);
+    if (!token) {
+      return undefined;
+    }
+
+    const classLocs = CodeAssist.classDefinitionLocations(document, position, token);
+    if (classLocs.length) {
+      return classLocs;
+    }
+
+    const locations = CodeAssist.symbolDefinitionLocations(document, position, token);
+    return locations.length ? locations : undefined;
+  }
+
   static register() {
     CodeAssist.initialize()
       .then(() => {
@@ -416,6 +984,12 @@ class CodeAssist {
           ),
           vscode.languages.registerHoverProvider(sel, {
             provideHover: CodeAssist.provideHover.bind(CodeAssist),
+          }),
+          vscode.languages.registerDefinitionProvider(sel, {
+            provideDefinition: CodeAssist.provideDefinition.bind(CodeAssist),
+          }),
+          vscode.languages.registerDocumentLinkProvider(sel, {
+            provideDocumentLinks: CodeAssist.provideDocumentLinks.bind(CodeAssist),
           })
         );
       })
