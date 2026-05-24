@@ -737,6 +737,113 @@ class CodeAssist {
   }
 
   /**
+   * Current document classes merged with all `require()` targets (members union on name clash).
+   * @param {vscode.TextDocument} document
+   * @returns {Map<string, { members: Set<string>, kinds: Map<string, 'method' | 'property'>, extends: string | null, fromRequire: string | null }>}
+   */
+  static mergedClassesForDocument(document) {
+    const text = document.getText();
+    const { classes: local } = CodeIndex.parseDocument(text);
+    /** @type {Map<string, { members: Set<string>, kinds: Map<string, 'method' | 'property'>, extends: string | null, fromRequire: string | null }>} */
+    const merged = new Map();
+    for (const [name, info] of local) {
+      merged.set(name, {
+        members: new Set(info.members),
+        kinds: new Map(info.kinds),
+        extends: info.extends,
+        fromRequire: null,
+      });
+    }
+    for (const filePath of CodeAssist.requiredFilePaths(document)) {
+      const importedText = CodeAssist.readFileText(filePath);
+      if (!importedText) {
+        continue;
+      }
+      const { classes: imported } = CodeIndex.parseDocument(importedText);
+      const fileLabel = path.basename(filePath);
+      for (const [name, info] of imported) {
+        if (!merged.has(name)) {
+          merged.set(name, {
+            members: new Set(info.members),
+            kinds: new Map(info.kinds),
+            extends: info.extends,
+            fromRequire: fileLabel,
+          });
+          continue;
+        }
+        const existing = merged.get(name);
+        if (!existing) {
+          continue;
+        }
+        for (const m of info.members) {
+          existing.members.add(m);
+          if (!existing.kinds.has(m) && info.kinds.has(m)) {
+            existing.kinds.set(m, info.kinds.get(m));
+          }
+        }
+      }
+    }
+    return merged;
+  }
+
+  /**
+   * @param {string} className
+   * @param {Map<string, { members: Set<string>, kinds: Map<string, 'method' | 'property'>, extends: string | null }>} classes
+   * @param {string} partial
+   * @param {string} detailPrefix
+   * @returns {vscode.CompletionItem[]}
+   */
+  static classMemberCompletionItems(className, classes, partial, detailPrefix) {
+    const mems = CodeIndex.membersForClass(className, classes);
+    const kinds = CodeIndex.memberKindsForClass(className, classes);
+    const p = partial.toLowerCase();
+    const prefix = detailPrefix || className;
+    return mems
+      .filter((n) => !p || n.toLowerCase().startsWith(p))
+      .map((n) => {
+        const isProp = kinds.get(n) === 'property';
+        const item = new vscode.CompletionItem(
+          n,
+          isProp ? vscode.CompletionItemKind.Property : vscode.CompletionItemKind.Method
+        );
+        item.insertText = n;
+        item.detail = `${isProp ? '属性' : '方法'} · ${prefix}`;
+        return item;
+      });
+  }
+
+  /**
+   * Class names from `require()` files (and merged members available after `.`).
+   * @param {vscode.TextDocument} document
+   * @param {string} partial
+   * @returns {vscode.CompletionItem[]}
+   */
+  static requiredClassCompletionItems(document, partial) {
+    const merged = CodeAssist.mergedClassesForDocument(document);
+    const p = partial.toLowerCase();
+    const builtinLc = new Set(BUILTIN_GLOBAL_CLASSES.map((c) => c.toLowerCase()));
+    /** @type {vscode.CompletionItem[]} */
+    const out = [];
+    for (const [name, info] of merged) {
+      if (p && !name.toLowerCase().startsWith(p)) {
+        continue;
+      }
+      if (builtinLc.has(name.toLowerCase())) {
+        continue;
+      }
+      const item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Class);
+      item.insertText = name;
+      if (info.fromRequire) {
+        item.detail = `类 · require ${info.fromRequire}`;
+      } else {
+        item.detail = '类';
+      }
+      out.push(item);
+    }
+    return out;
+  }
+
+  /**
    * @param {vscode.TextDocument} document
    * @param {vscode.Position} position
    * @param {vscode.CancellationToken} _token
@@ -762,7 +869,7 @@ class CodeAssist {
       const receiver = namespace.slice(0, -1);
       const fullText = document.getText();
       const offset = document.offsetAt(position);
-      const { classes } = CodeIndex.parseDocument(fullText);
+      const merged = CodeAssist.mergedClassesForDocument(document);
 
       /** @type {string | null} */
       let instClass = null;
@@ -772,21 +879,24 @@ class CodeAssist {
       } else {
         const vmap = CodeIndex.varToClassBeforeOffset(fullText, offset);
         instClass = vmap.get(receiver) || null;
+        if (!instClass && merged.has(receiver)) {
+          instClass = receiver;
+        }
       }
 
-      if (instClass && classes.has(instClass)) {
-        const mems = CodeIndex.membersForClass(instClass, classes);
-        /** @type {Record<string, string>} */
-        const detail = {};
-        for (const n of mems) {
-          detail[n] = `成员 · ${instClass}`;
-        }
-        return CodeAssist.filterCompletionNames(
-          mems,
+      if (instClass && merged.has(instClass)) {
+        const info = merged.get(instClass);
+        const detailPrefix =
+          info && info.fromRequire ? `${instClass} · ${info.fromRequire}` : instClass;
+        const memberItems = CodeAssist.classMemberCompletionItems(
+          instClass,
+          merged,
           partial,
-          vscode.CompletionItemKind.Method,
-          detail
+          detailPrefix
         );
+        if (memberItems.length) {
+          return memberItems;
+        }
       }
       if (instClass) {
         const nsKey = instClass + '.';
@@ -802,9 +912,9 @@ class CodeAssist {
     if (!word) {
       if (context.triggerKind === vscode.CompletionTriggerKind.Invoke) {
         return CodeAssist.dedupeCompletionItems(
-          CodeAssist.builtinClassCompletionItems('').concat(
-            CodeAssist.keywordItems(KEYWORDS.concat(GLOBALS), '')
-          )
+          CodeAssist.builtinClassCompletionItems('')
+            .concat(CodeAssist.requiredClassCompletionItems(document, ''))
+            .concat(CodeAssist.keywordItems(KEYWORDS.concat(GLOBALS), ''))
         );
       }
       return undefined;
@@ -814,6 +924,7 @@ class CodeAssist {
     let items = [];
 
     items = items.concat(CodeAssist.builtinClassCompletionItems(word));
+    items = items.concat(CodeAssist.requiredClassCompletionItems(document, word));
 
     if (CodeRegistry.registers && CodeRegistry.registers[word]) {
       const fromRegistry = CodeRegistry.registers[word].exec(word, CodeAssist.config);

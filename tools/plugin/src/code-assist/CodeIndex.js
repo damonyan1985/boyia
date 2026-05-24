@@ -110,38 +110,45 @@ function isPropFunKeyword(body, funStart) {
 
 /**
  * @param {string} body class body without outer braces
- * @returns {Set<string>}
+ * @returns {{ members: Set<string>, kinds: Map<string, 'method' | 'property'> }}
  */
 function extractMembersFromClassBody(body) {
-  const names = new Set();
+  /** @type {Set<string>} */
+  const members = new Set();
+  /** @type {Map<string, 'method' | 'property'>} */
+  const kinds = new Map();
   let m;
   const r1 = /\bprop\s+async\s+fun\s+(\w+)\s*\(/g;
   while ((m = r1.exec(body))) {
-    names.add(m[1]);
+    members.add(m[1]);
+    kinds.set(m[1], 'method');
   }
   const r2 = /\bprop\s+fun\s+(\w+)\s*\(/g;
   while ((m = r2.exec(body))) {
-    names.add(m[1]);
+    members.add(m[1]);
+    kinds.set(m[1], 'method');
   }
   const r3 = /\bprop\s+(?!async\b)(?!fun\b)(\w+)\s*[=;]/g;
   while ((m = r3.exec(body))) {
-    names.add(m[1]);
+    members.add(m[1]);
+    kinds.set(m[1], 'property');
   }
   const r4 = /\bfun\s+(\w+)\s*\(/g;
   while ((m = r4.exec(body))) {
     if (!isPropFunKeyword(body, m.index)) {
-      names.add(m[1]);
+      members.add(m[1]);
+      kinds.set(m[1], 'method');
     }
   }
-  return names;
+  return { members, kinds };
 }
 
 /**
  * @param {string} text full document
- * @returns {{ classes: Map<string, { members: Set<string>, extends: string | null }> }}
+ * @returns {{ classes: Map<string, { members: Set<string>, kinds: Map<string, 'method' | 'property'>, extends: string | null }> }}
  */
 function parseClasses(text) {
-  /** @type {Map<string, { members: Set<string>, extends: string | null }>} */
+  /** @type {Map<string, { members: Set<string>, kinds: Map<string, 'method' | 'property'>, extends: string | null }>} */
   const classes = new Map();
   const re = /\bclass\s+(\w+)(?:\s+extends\s+(\w+))?\s*\{/g;
   let m;
@@ -152,9 +159,10 @@ function parseClasses(text) {
       continue;
     }
     const body = text.slice(openIdx + 1, closeIdx);
-    const members = extractMembersFromClassBody(body);
+    const extracted = extractMembersFromClassBody(body);
     classes.set(m[1], {
-      members,
+      members: extracted.members,
+      kinds: extracted.kinds,
       extends: m[2] || null,
     });
   }
@@ -162,30 +170,71 @@ function parseClasses(text) {
 }
 
 /**
- * Merge own + inherited members (own first, then parent-only names).
+ * @param {Map<string, { members: Set<string>, kinds: Map<string, 'method' | 'property'>, extends: string | null }>} classes
  * @param {string} className
- * @param {Map<string, { members: Set<string>, extends: string | null }>} classes
- * @param {Set<string>} [visited]
- * @returns {string[]}
+ * @param {Set<string>} visited
+ * @returns {{ members: Set<string>, kinds: Map<string, 'method' | 'property'> } | null}
  */
-function membersForClass(className, classes, visited = new Set()) {
+function classInfoMerged(className, classes, visited = new Set()) {
   if (visited.has(className)) {
-    return [];
+    return null;
   }
   visited.add(className);
   const info = classes.get(className);
   if (!info) {
+    return null;
+  }
+  const members = new Set(info.members);
+  const kinds = new Map(info.kinds);
+  const parentName = info.extends;
+  if (parentName && classes.has(parentName)) {
+    const parent = classInfoMerged(parentName, classes, visited);
+    if (parent) {
+      for (const n of parent.members) {
+        if (!members.has(n)) {
+          members.add(n);
+          const k = parent.kinds.get(n);
+          if (k) {
+            kinds.set(n, k);
+          }
+        }
+      }
+    }
+  }
+  return { members, kinds };
+}
+
+/**
+ * Merge own + inherited members (own first, then parent-only names).
+ * @param {string} className
+ * @param {Map<string, { members: Set<string>, kinds: Map<string, 'method' | 'property'>, extends: string | null }>} classes
+ * @param {Set<string>} [visited]
+ * @returns {string[]}
+ */
+function membersForClass(className, classes, visited = new Set()) {
+  const merged = classInfoMerged(className, classes, visited);
+  if (!merged) {
     return [];
   }
-  const own = Array.from(info.members);
-  const parentName = info.extends;
-  if (!parentName || !classes.has(parentName)) {
-    return own;
+  const info = classes.get(className);
+  if (!info) {
+    return Array.from(merged.members);
   }
-  const parentList = membersForClass(parentName, classes, visited);
+  const own = Array.from(info.members);
   const ownSet = new Set(own);
-  const merged = own.concat(parentList.filter((n) => !ownSet.has(n)));
-  return merged;
+  const rest = Array.from(merged.members).filter((n) => !ownSet.has(n));
+  return own.concat(rest);
+}
+
+/**
+ * @param {string} className
+ * @param {Map<string, { members: Set<string>, kinds: Map<string, 'method' | 'property'>, extends: string | null }>} classes
+ * @param {Set<string>} [visited]
+ * @returns {Map<string, 'method' | 'property'>}
+ */
+function memberKindsForClass(className, classes, visited = new Set()) {
+  const merged = classInfoMerged(className, classes, visited);
+  return merged ? merged.kinds : new Map();
 }
 
 /**
@@ -338,6 +387,7 @@ function collectSymbolNames(text, offset) {
 module.exports = {
   parseDocument,
   membersForClass,
+  memberKindsForClass,
   varToClassBeforeOffset,
   innermostClassAtOffset,
   indexOfMatchingBrace,
