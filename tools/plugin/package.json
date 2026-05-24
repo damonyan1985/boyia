@@ -31,7 +31,11 @@
 				"extensions": [
 					".boyia"
 				],
-				"configuration": "./language/language.json"
+				"configuration": "./language/language.json",
+				"icon": {
+					"light": "./icon/boyia-light.svg",
+					"dark": "./icon/boyia-dark.svg"
+				}
 			}
 		],
 		"grammars": [
