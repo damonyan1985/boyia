@@ -447,7 +447,6 @@ enum InitVmStage {
     GlobalsOk,
     FunTableOk,
     CpuOk,
-    VmCodeStructOk,
     StrTableOk,
     EntryOk,
     ExecStateCacheOk,
@@ -467,7 +466,6 @@ unsafe fn init_vm_abort(vm_ptr: *mut BoyiaVM, completed: InitVmStage) -> *mut LV
     let globals_layout = Layout::array::<BoyiaValue>(NUM_GLOBAL_VARS).unwrap();
     let fun_table_layout = Layout::array::<BoyiaFunction>(NUM_FUNC).unwrap();
     let cpu_layout = Layout::new::<VMCpu>();
-    let vmcode_layout = Layout::new::<VMCode>();
     let str_table_layout = Layout::new::<VMStrTable>();
     let entry_layout = Layout::new::<VMEntryTable>();
     let vm_layout = Layout::new::<BoyiaVM>();
@@ -499,11 +497,6 @@ unsafe fn init_vm_abort(vm_ptr: *mut BoyiaVM, completed: InitVmStage) -> *mut LV
         dealloc(vm.mStrTable as *mut u8, str_table_layout);
         vm.mStrTable = ptr::null_mut();
     }
-    if completed >= InitVmStage::VmCodeStructOk && !vm.mVMCode.is_null() {
-        ptr::drop_in_place(vm.mVMCode);
-        dealloc(vm.mVMCode as *mut u8, vmcode_layout);
-        vm.mVMCode = ptr::null_mut();
-    }
     if completed >= InitVmStage::CpuOk && !vm.mCpu.is_null() {
         dealloc(vm.mCpu as *mut u8, cpu_layout);
         vm.mCpu = ptr::null_mut();
@@ -517,6 +510,7 @@ unsafe fn init_vm_abort(vm_ptr: *mut BoyiaVM, completed: InitVmStage) -> *mut LV
         vm.mGlobals = ptr::null_mut();
     }
     if completed >= InitVmStage::VmShell {
+        ptr::drop_in_place(&mut vm.mVMCode);
         dealloc(vm_ptr as *mut u8, vm_layout);
     }
     ptr::null_mut()
@@ -536,6 +530,7 @@ pub unsafe fn init_vm(creator: *mut dyn Runtime) -> *mut LVoid {
     vm.mESLink = ptr::null_mut();
     vm.mGValSize = 0;
     vm.mFunSize = 0;
+    vm.mVMCode = VMCode::new();
 
     eprintln!("[init_vm] 2 alloc Globals");
     let globals_layout = Layout::array::<BoyiaValue>(NUM_GLOBAL_VARS).unwrap();
@@ -572,20 +567,13 @@ pub unsafe fn init_vm(creator: *mut dyn Runtime) -> *mut LVoid {
     };
     eprintln!("[init_vm] 4b cpu inited");
 
-    eprintln!("[init_vm] 5 alloc VMCode");
-    let vmcode_layout = Layout::new::<VMCode>();
-    let vmcode_ptr = std::alloc::alloc(vmcode_layout) as *mut VMCode;
-    if vmcode_ptr.is_null() {
-        return init_vm_abort(vm_ptr, InitVmStage::CpuOk);
-    }
-    ptr::write(vmcode_ptr, VMCode::new());
-    vm.mVMCode = vmcode_ptr;
+    eprintln!("[init_vm] 5 init VMCode (embedded)");
 
     eprintln!("[init_vm] 6 alloc StrTable");
     let str_table_layout = Layout::new::<VMStrTable>();
     vm.mStrTable = alloc_zeroed(str_table_layout) as *mut VMStrTable;
     if vm.mStrTable.is_null() {
-        return init_vm_abort(vm_ptr, InitVmStage::VmCodeStructOk);
+        return init_vm_abort(vm_ptr, InitVmStage::CpuOk);
     }
     (*vm.mStrTable).mSize = 0;
 
@@ -650,11 +638,6 @@ pub unsafe fn destroy_vm(vm: *mut LVoid) {
         let layout = Layout::new::<VMCpu>();
         dealloc((*vm_ptr).mCpu as *mut u8, layout);
     }
-    if !(*vm_ptr).mVMCode.is_null() {
-        ptr::drop_in_place((*vm_ptr).mVMCode);
-        let layout = Layout::new::<VMCode>();
-        dealloc((*vm_ptr).mVMCode as *mut u8, layout);
-    }
     if !(*vm_ptr).mStrTable.is_null() {
         let layout = Layout::new::<VMStrTable>();
         dealloc((*vm_ptr).mStrTable as *mut u8, layout);
@@ -682,6 +665,7 @@ pub unsafe fn destroy_vm(vm: *mut LVoid) {
         (*vm_ptr).mTaskQueue = ptr::null_mut();
     }
     let layout = Layout::new::<BoyiaVM>();
+    ptr::drop_in_place(&mut (*vm_ptr).mVMCode);
     dealloc(vm_ptr as *mut u8, layout);
 }
 
@@ -714,10 +698,7 @@ pub unsafe fn load_instructions(buffer: *mut LVoid, size: LInt, vm: *mut LVoid) 
         return;
     }
     let vm_ptr = vm as *mut BoyiaVM;
-    if (*vm_ptr).mVMCode.is_null() {
-        return;
-    }
-    let vmcode = &mut *(*vm_ptr).mVMCode;
+    let vmcode = &mut (*vm_ptr).mVMCode;
     let instruction_size = mem::size_of::<Instruction>();
     let count = (size as usize) / instruction_size;
     vmcode.load_from_buffer(buffer as *const Instruction, count);
@@ -937,10 +918,7 @@ pub unsafe fn cache_vm_code(vm: *mut LVoid) {
         return;
     }
     let vm_ptr = vm as *mut BoyiaVM;
-    if (*vm_ptr).mVMCode.is_null() {
-        return;
-    }
-    let vmcode = &mut *(*vm_ptr).mVMCode;
+    let vmcode = &mut (*vm_ptr).mVMCode;
     if vmcode.is_empty() {
         return;
     }

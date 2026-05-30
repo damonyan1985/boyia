@@ -121,10 +121,10 @@ unsafe fn skip_comment(cs: *mut CompileState) {
 
 /// Allocate one instruction in vm->mVMCode; returns index or None if full.
 unsafe fn allocate_instruction(vm: *mut BoyiaVM) -> Option<usize> {
-    if vm.is_null() || (*vm).mVMCode.is_null() {
+    if vm.is_null() {
         return None;
     }
-    let vmcode = &mut *(*vm).mVMCode;
+    let vmcode = &mut (*vm).mVMCode;
     let (index, inst) = vmcode.push_instruction()?;
     (*inst).mOPCode = CmdType::kCmdNone;
     (*inst).mOPLeft.mType = OpType::OP_NONE;
@@ -138,18 +138,18 @@ unsafe fn allocate_instruction(vm: *mut BoyiaVM) -> Option<usize> {
 
 /// Get pointer to instruction at index.
 unsafe fn get_instruction_mut(vm: *mut BoyiaVM, index: usize) -> *mut Instruction {
-    if vm.is_null() || (*vm).mVMCode.is_null() {
+    if vm.is_null() {
         return ptr::null_mut();
     }
-    (*(*vm).mVMCode).instruction_ptr(index)
+    (*vm).mVMCode.instruction_ptr(index)
 }
 
 /// Instruction pointer to index in mVMCode (matches C++ pointer difference).
 unsafe fn inst_ptr_to_index(vm: *mut BoyiaVM, inst: *mut Instruction) -> usize {
-    if vm.is_null() || (*vm).mVMCode.is_null() {
+    if vm.is_null() {
         return 0;
     }
-    (*(*vm).mVMCode).ptr_to_index(inst).unwrap_or(0)
+    (*vm).mVMCode.ptr_to_index(inst).unwrap_or(0)
 }
 
 /// SetCodePosition(codeIndex, row, column, vm) in BoyiaValue.cpp: records debug position. No-op when no debugger.

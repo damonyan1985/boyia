@@ -836,7 +836,7 @@ pub(crate) struct BoyiaVM {
     pub mESLink: *mut ExecState,
     pub mEState: *mut ExecState,
     pub mEStateCache: *mut LVoid,
-    pub mVMCode: *mut VMCode,
+    pub mVMCode: VMCode,
     pub mStrTable: *mut VMStrTable,
     pub mEntry: *mut VMEntryTable,
     pub mHandlers: *mut OPHandler,
