@@ -197,8 +197,8 @@ class PrinterExt extends Printer {
         });
     }
 
-    prop async createDirsDemo() {
-        var result = (await this.createDirsAsync("script/assets/nested_create_dirs_demo/sub"));
+    prop async createDirsDemo(path) {
+        var result = (await this.createDirsAsync(path));
         if (result.get("status") == "ok") {
             Util.log("createDirsAsync ok");
         } else {
@@ -214,6 +214,8 @@ class PrinterExt extends Printer {
     }
 
     prop async fileCreateDelete() {
+        (await this.createDirsDemo("script/assets/file_delete_test"));
+
         var path = "script/assets/file_delete_test/demofile";
         var result = (await this.createFileAsync(path));
         if (result.get("status") == "ok") {
@@ -320,7 +322,7 @@ pe.loadAsync("https://httpbin.org/get");
 //pe.testLocal();
 pe.writeFile("hello from File.write");
 pe.zipFile();
-pe.createDirsDemo();
+pe.createDirsDemo("script/assets/nested_create_dirs_demo/sub");
 pe.fileCreateDelete();
 //pe.fileExistsDemo();
 pe.jsonRead();

@@ -9,6 +9,7 @@
 
 pub type LInt8 = std::os::raw::c_char;
 pub type LInt = std::os::raw::c_int;
+pub type LUint = std::os::raw::c_uint;
 pub type LUint8 = u8;
 pub type LUintPtr = usize;
 pub type LIntPtr = isize;
