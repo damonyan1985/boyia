@@ -379,7 +379,6 @@ pub const kInvalidInstruction: LIntPtr = -1;
 pub(crate) type OPHandler = unsafe fn(*mut Instruction, *mut BoyiaVM) -> OpHandleResult;
 
 // BoyiaValue types matching BoyiaValue.h
-#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BoyiaStr {
     pub mPtr: *mut LInt8,
@@ -387,7 +386,6 @@ pub struct BoyiaStr {
 }
 
 /// Token: name (slice into source), type, value. Matches BoyiaCore.cpp BoyiaToken.
-#[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct BoyiaToken {
     pub mTokenName: BoyiaStr,
@@ -492,14 +490,12 @@ pub(crate) struct CompileState {
     pub mFunctionScopes: Vec<FunctionScope>,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BoyiaClass {
     pub mPtr: LIntPtr,
     pub mSuper: LIntPtr,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy)]
 pub union RealValue {
     pub mIntVal: LIntPtr,
@@ -508,7 +504,6 @@ pub union RealValue {
     pub mStrVal: BoyiaStr,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BoyiaValue {
     pub mNameKey: LUintPtr,
@@ -516,7 +511,6 @@ pub struct BoyiaValue {
     pub mValue: RealValue,
 }
 
-#[repr(C)]
 pub struct BoyiaFunction {
     pub mFuncBody: LIntPtr,
     pub mParams: *mut BoyiaValue,
@@ -526,7 +520,6 @@ pub struct BoyiaFunction {
 }
 
 /// Filled by [crate::core::get_callee_and_captures_from_locals]: callee and closure capture region in `mParams`.
-#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct CalleeCapturesInfo {
     pub callee: *mut BoyiaFunction,
@@ -539,28 +532,24 @@ pub struct CalleeCapturesInfo {
 pub const CACHE_PROP: LInt = 1;
 pub const CACHE_METHOD: LInt = 2;
 
-#[repr(C)]
 pub(crate) struct InlineCacheItem {
     pub mClass: *mut BoyiaValue,
     pub mIndex: LIntPtr,
     pub mType: LInt,
 }
 
-#[repr(C)]
 pub(crate) struct InlineCache {
     pub mItems: [InlineCacheItem; MAX_INLINE_CACHE],
     pub mSize: LInt,
 }
 
 /// C++ `OpCommand::mValue` (union of `mInt` / `mReal`).
-#[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) union OpCommandValue {
     pub mInt: LIntPtr,
     pub mReal: LReal64,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct OpCommand {
     pub mType: OpType,
@@ -656,7 +645,6 @@ impl OpCommand {
     }
 }
 
-#[repr(C)]
 pub(crate) struct Instruction {
     pub mOPCode: CmdType,
     pub mOPLeft: OpCommand,
@@ -665,13 +653,11 @@ pub(crate) struct Instruction {
     pub mNext: LIntPtr,
 }
 
-#[repr(C)]
 pub(crate) struct CommandTable {
     pub mBegin: *mut Instruction,
     pub mEnd: *mut Instruction,
 }
 
-#[repr(C)]
 pub(crate) struct StackFrame {
     pub mPC: *mut Instruction,
     pub mLValSize: LInt,
@@ -681,31 +667,123 @@ pub(crate) struct StackFrame {
     pub mClass: BoyiaValue,
 }
 
-#[repr(C)]
 pub(crate) struct VMCpu {
     pub mReg0: BoyiaValue,
     pub mReg1: BoyiaValue,
 }
 
-#[repr(C)]
 pub(crate) struct VMCode {
-    pub mCode: *mut Instruction,
-    pub mSize: LInt,
+    mCode: Vec<Instruction>,
 }
 
-#[repr(C)]
+impl VMCode {
+    pub fn new() -> Self {
+        Self {
+            mCode: Vec::with_capacity(CODE_CAPACITY),
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.mCode.len()
+    }
+
+    #[inline]
+    pub fn size(&self) -> LInt {
+        self.mCode.len() as LInt
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.mCode.is_empty()
+    }
+
+    /// Pointer to the first instruction (legacy `mCode` base).
+    #[inline]
+    pub fn base_ptr(&self) -> *mut Instruction {
+        if self.mCode.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            self.mCode.as_ptr() as *mut Instruction
+        }
+    }
+
+    /// Mutable pointer to instruction at `index`; null if out of range.
+    #[inline]
+    pub fn instruction_ptr(&mut self, index: usize) -> *mut Instruction {
+        self.mCode
+            .get_mut(index)
+            .map(|inst| inst as *mut Instruction)
+            .unwrap_or(std::ptr::null_mut())
+    }
+
+    /// Instruction pointer by index offset (matches `mNext` / compile-time indices).
+    #[inline]
+    pub fn instruction_at_offset(&mut self, offset: LIntPtr) -> *mut Instruction {
+        if offset < 0 {
+            return std::ptr::null_mut();
+        }
+        self.instruction_ptr(offset as usize)
+    }
+
+    /// Convert instruction pointer back to index in this buffer.
+    pub fn ptr_to_index(&self, inst: *const Instruction) -> Option<usize> {
+        if inst.is_null() || self.mCode.is_empty() {
+            return None;
+        }
+        let base = self.mCode.as_ptr();
+        let end = unsafe { base.add(self.mCode.len()) };
+        if inst < base || inst >= end {
+            return None;
+        }
+        Some((inst as usize - base as usize) / std::mem::size_of::<Instruction>())
+    }
+
+    fn placeholder_instruction() -> Instruction {
+        Instruction {
+            mOPCode: CmdType::kCmdNone,
+            mOPLeft: OpCommand::none(),
+            mOPRight: OpCommand::none(),
+            mCache: std::ptr::null_mut(),
+            mNext: kInvalidInstruction,
+        }
+    }
+
+    /// Append one placeholder instruction; returns `(index, pointer)` or None when full.
+    pub fn push_instruction(&mut self) -> Option<(usize, *mut Instruction)> {
+        if self.mCode.len() >= CODE_CAPACITY {
+            return None;
+        }
+        let index = self.mCode.len();
+        self.mCode.push(Self::placeholder_instruction());
+        Some((index, self.instruction_ptr(index)))
+    }
+
+    /// Replace all instructions from a raw buffer (used by `load_instructions`).
+    pub unsafe fn load_from_buffer(&mut self, buffer: *const Instruction, count: usize) -> bool {
+        if buffer.is_null() || count > CODE_CAPACITY {
+            return false;
+        }
+        self.mCode.clear();
+        if self.mCode.capacity() < count {
+            self.mCode.reserve(count - self.mCode.capacity());
+        }
+        std::ptr::copy_nonoverlapping(buffer, self.mCode.as_mut_ptr(), count);
+        self.mCode.set_len(count);
+        true
+    }
+}
+
 pub(crate) struct VMStrTable {
     pub mTable: [BoyiaStr; CONST_CAPACITY],
     pub mSize: LInt,
 }
 
-#[repr(C)]
 pub(crate) struct VMEntryTable {
     pub mTable: [LInt; ENTRY_CAPACITY],
     pub mSize: LInt,
 }
 
-#[repr(C)]
 pub(crate) struct MicroTask {
     pub mResult: BoyiaValue,
     pub mObjRef: BoyiaValue,
@@ -714,26 +792,22 @@ pub(crate) struct MicroTask {
     pub mAllocLink: MicroTaskLink,
 }
 
-#[repr(C)]
 pub(crate) struct MicroTaskLink {
     pub mLinkNext: *mut MicroTask,
     pub mLinkPrev: *mut MicroTask,
 }
 
-#[repr(C)]
 pub(crate) struct MicroTaskQueue {
     pub mUsedTasks: MicroTaskList,
     pub mAllocTasks: MicroTaskList,
     pub mTaskCache: *mut LVoid, // MemoryCache pointer
 }
 
-#[repr(C)]
 pub(crate) struct MicroTaskList {
     pub mHead: *mut MicroTask,
     pub mEnd: *mut MicroTask,
 }
 
-#[repr(C)]
 pub(crate) struct ExecState {
     pub mStackFrame: StackFrame,
     pub mFrameIndex: LInt,
@@ -750,7 +824,6 @@ pub(crate) struct ExecState {
 }
 
 // Main VM structure. mCreator is *mut dyn Runtime (fat pointer). Not exposed in public API.
-#[repr(C)]
 pub(crate) struct BoyiaVM {
     pub mFunTable: *mut BoyiaFunction,
     pub mGlobals: *mut BoyiaValue,
@@ -775,7 +848,6 @@ pub(crate) struct BoyiaVM {
 // Native function pointer type (return OpHandleResult for VM dispatch).
 pub type NativePtr = unsafe fn(*mut LVoid) -> OpHandleResult;
 
-#[repr(C)]
 pub struct NativeFunction {
     pub mNameKey: LUintPtr,
     pub mAddr: NativePtr,

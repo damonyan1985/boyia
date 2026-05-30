@@ -448,7 +448,6 @@ enum InitVmStage {
     FunTableOk,
     CpuOk,
     VmCodeStructOk,
-    CodeBufferOk,
     StrTableOk,
     EntryOk,
     ExecStateCacheOk,
@@ -469,7 +468,6 @@ unsafe fn init_vm_abort(vm_ptr: *mut BoyiaVM, completed: InitVmStage) -> *mut LV
     let fun_table_layout = Layout::array::<BoyiaFunction>(NUM_FUNC).unwrap();
     let cpu_layout = Layout::new::<VMCpu>();
     let vmcode_layout = Layout::new::<VMCode>();
-    let code_layout = Layout::array::<Instruction>(CODE_CAPACITY).unwrap();
     let str_table_layout = Layout::new::<VMStrTable>();
     let entry_layout = Layout::new::<VMEntryTable>();
     let vm_layout = Layout::new::<BoyiaVM>();
@@ -501,14 +499,8 @@ unsafe fn init_vm_abort(vm_ptr: *mut BoyiaVM, completed: InitVmStage) -> *mut LV
         dealloc(vm.mStrTable as *mut u8, str_table_layout);
         vm.mStrTable = ptr::null_mut();
     }
-    if completed >= InitVmStage::CodeBufferOk && !vm.mVMCode.is_null() {
-        let vmcode = vm.mVMCode;
-        if !(*vmcode).mCode.is_null() {
-            dealloc((*vmcode).mCode as *mut u8, code_layout);
-            (*vmcode).mCode = ptr::null_mut();
-        }
-    }
     if completed >= InitVmStage::VmCodeStructOk && !vm.mVMCode.is_null() {
+        ptr::drop_in_place(vm.mVMCode);
         dealloc(vm.mVMCode as *mut u8, vmcode_layout);
         vm.mVMCode = ptr::null_mut();
     }
@@ -582,24 +574,18 @@ pub unsafe fn init_vm(creator: *mut dyn Runtime) -> *mut LVoid {
 
     eprintln!("[init_vm] 5 alloc VMCode");
     let vmcode_layout = Layout::new::<VMCode>();
-    vm.mVMCode = alloc_zeroed(vmcode_layout) as *mut VMCode;
-    if vm.mVMCode.is_null() {
+    let vmcode_ptr = std::alloc::alloc(vmcode_layout) as *mut VMCode;
+    if vmcode_ptr.is_null() {
         return init_vm_abort(vm_ptr, InitVmStage::CpuOk);
     }
-    let vmcode = &mut *vm.mVMCode;
-    let code_layout = Layout::array::<Instruction>(CODE_CAPACITY).unwrap();
-    eprintln!("[init_vm] 5b alloc Code size={}", code_layout.size());
-    vmcode.mCode = alloc_zeroed(code_layout) as *mut Instruction;
-    if vmcode.mCode.is_null() {
-        return init_vm_abort(vm_ptr, InitVmStage::VmCodeStructOk);
-    }
-    vmcode.mSize = 0;
+    ptr::write(vmcode_ptr, VMCode::new());
+    vm.mVMCode = vmcode_ptr;
 
     eprintln!("[init_vm] 6 alloc StrTable");
     let str_table_layout = Layout::new::<VMStrTable>();
     vm.mStrTable = alloc_zeroed(str_table_layout) as *mut VMStrTable;
     if vm.mStrTable.is_null() {
-        return init_vm_abort(vm_ptr, InitVmStage::CodeBufferOk);
+        return init_vm_abort(vm_ptr, InitVmStage::VmCodeStructOk);
     }
     (*vm.mStrTable).mSize = 0;
 
@@ -665,13 +651,9 @@ pub unsafe fn destroy_vm(vm: *mut LVoid) {
         dealloc((*vm_ptr).mCpu as *mut u8, layout);
     }
     if !(*vm_ptr).mVMCode.is_null() {
-        let vmcode = (*vm_ptr).mVMCode;
-        if !(*vmcode).mCode.is_null() {
-            let layout = Layout::array::<Instruction>(CODE_CAPACITY).unwrap();
-            dealloc((*vmcode).mCode as *mut u8, layout);
-        }
+        ptr::drop_in_place((*vm_ptr).mVMCode);
         let layout = Layout::new::<VMCode>();
-        dealloc(vmcode as *mut u8, layout);
+        dealloc((*vm_ptr).mVMCode as *mut u8, layout);
     }
     if !(*vm_ptr).mStrTable.is_null() {
         let layout = Layout::new::<VMStrTable>();
@@ -738,15 +720,7 @@ pub unsafe fn load_instructions(buffer: *mut LVoid, size: LInt, vm: *mut LVoid) 
     let vmcode = &mut *(*vm_ptr).mVMCode;
     let instruction_size = mem::size_of::<Instruction>();
     let count = (size as usize) / instruction_size;
-    if count > CODE_CAPACITY {
-        return;
-    }
-    vmcode.mSize = count as LInt;
-    ptr::copy_nonoverlapping(
-        buffer as *const Instruction,
-        vmcode.mCode,
-        count,
-    );
+    vmcode.load_from_buffer(buffer as *const Instruction, count);
 }
 
 pub unsafe fn load_entry_table(buffer: *mut LVoid, size: LInt, vm: *mut LVoid) {
@@ -963,14 +937,16 @@ pub unsafe fn cache_vm_code(vm: *mut LVoid) {
         return;
     }
     let vm_ptr = vm as *mut BoyiaVM;
-    let vmcode = (*vm_ptr).mVMCode;
-    if vmcode.is_null() || (*vmcode).mCode.is_null() {
+    if (*vm_ptr).mVMCode.is_null() {
         return;
     }
-    let code = (*vmcode).mCode;
-    let size = (*vmcode).mSize as usize;
+    let vmcode = &mut *(*vm_ptr).mVMCode;
+    if vmcode.is_empty() {
+        return;
+    }
+    let size = vmcode.len();
     for i in 0..size {
-        let inst = code.add(i);
+        let inst = vmcode.instruction_ptr(i);
         if !(*inst).mCache.is_null() {
             let layout = Layout::new::<InlineCache>();
             dealloc((*inst).mCache as *mut u8, layout);

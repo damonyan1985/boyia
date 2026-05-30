@@ -172,14 +172,13 @@ unsafe fn get_op_value(inst: *const Instruction, side: OpSide, vm: *mut BoyiaVM)
 /// Next instruction by mNext offset; null if kInvalidInstruction. Used by core::consume_micro_task.
 #[inline]
 pub(crate) unsafe fn next_instruction(inst: *const Instruction, vm: *mut BoyiaVM) -> *mut Instruction {
-    if inst.is_null() || vm.is_null() || (*vm).mVMCode.is_null() || (*(*vm).mVMCode).mCode.is_null() {
+    if inst.is_null() || vm.is_null() || (*vm).mVMCode.is_null() {
         return ptr::null_mut();
     }
     if (*inst).mNext == kInvalidInstruction {
         return ptr::null_mut();
     }
-    let code = (*(*vm).mVMCode).mCode;
-    code.offset((*inst).mNext as isize)
+    (*(*vm).mVMCode).instruction_at_offset((*inst).mNext)
 }
 
 /// Reset scene of global execute state. Strict 1:1 match of ResetScene in BoyiaCore.cpp.
@@ -1290,9 +1289,9 @@ unsafe fn handle_create_executor(inst: *const Instruction, vm: *mut BoyiaVM) -> 
         return OpHandleResult::kOpResultEnd;
     }
     if (*inst).mOPLeft.int_value() != -1 {
-        let code = (*(*vm).mVMCode).mCode;
-        (*new_table).mBegin = code.offset((*inst).mOPLeft.int_value() as isize);
-        (*new_table).mEnd = code.offset((*inst).mOPRight.int_value() as isize);
+        let vmcode = &mut *(*vm).mVMCode;
+        (*new_table).mBegin = vmcode.instruction_at_offset((*inst).mOPLeft.int_value());
+        (*new_table).mEnd = vmcode.instruction_at_offset((*inst).mOPRight.int_value());
     } else {
         (*new_table).mBegin = ptr::null_mut();
         (*new_table).mEnd = ptr::null_mut();
@@ -1572,13 +1571,13 @@ pub unsafe fn execute_global_code(vm: *mut LVoid) {
     let vm = vm as *mut BoyiaVM;
     let vmcode = (*vm).mVMCode;
     let entry_ptr = (*vm).mEntry;
-    if (*vm).mEState.is_null() || entry_ptr.is_null() || vmcode.is_null() || (*vmcode).mCode.is_null() {
+    if (*vm).mEState.is_null() || entry_ptr.is_null() || vmcode.is_null() || (*vmcode).is_empty() {
         eprintln!("[execute_global_code] early return null");
         return;
     }
     reset_scene((*vm).mEState);
     let entry = &*entry_ptr;
-    let code_base = (*vmcode).mCode;
+    let vmcode_ref = &mut *vmcode;
     let size = entry.mSize as usize;
     eprintln!("[execute_global_code] entry size={}", size);
     let mut cmds = crate::types::CommandTable {
@@ -1587,7 +1586,7 @@ pub unsafe fn execute_global_code(vm: *mut LVoid) {
     };
     for i in 0..size {
         let entry_offset = *entry.mTable.as_ptr().add(i);
-        cmds.mBegin = code_base.offset(entry_offset as isize);
+        cmds.mBegin = vmcode_ref.instruction_at_offset(entry_offset as LIntPtr);
         cmds.mEnd = ptr::null_mut();
         (*(*vm).mEState).mStackFrame.mContext = &mut cmds;
         execute_code(vm as *mut LVoid);

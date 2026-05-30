@@ -8,7 +8,6 @@
 use crate::core::get_runtime_from_vm;
 use crate::types::*;
 use std::ptr;
-use std::mem;
 
 const MAX_IDENT_LEN: usize = 256;
 
@@ -122,24 +121,19 @@ unsafe fn skip_comment(cs: *mut CompileState) {
 
 /// Allocate one instruction in vm->mVMCode; returns index or None if full.
 unsafe fn allocate_instruction(vm: *mut BoyiaVM) -> Option<usize> {
-    if vm.is_null() || (*vm).mVMCode.is_null() || (*vm).mVMCode.as_ref().unwrap().mCode.is_null() {
+    if vm.is_null() || (*vm).mVMCode.is_null() {
         return None;
     }
     let vmcode = &mut *(*vm).mVMCode;
-    let size = vmcode.mSize as usize;
-    if size >= CODE_CAPACITY {
-        return None;
-    }
-    vmcode.mSize += 1;
-    let inst = vmcode.mCode.add(size);
-    (*inst).mOPCode = CmdType::kCmdNone; // placeholder until overwritten by put_instruction
+    let (index, inst) = vmcode.push_instruction()?;
+    (*inst).mOPCode = CmdType::kCmdNone;
     (*inst).mOPLeft.mType = OpType::OP_NONE;
     (*inst).mOPLeft.set_int_value(0);
     (*inst).mOPRight.mType = OpType::OP_NONE;
     (*inst).mOPRight.set_int_value(0);
     (*inst).mNext = kInvalidInstruction;
     (*inst).mCache = ptr::null_mut();
-    Some(size)
+    Some(index)
 }
 
 /// Get pointer to instruction at index.
@@ -147,23 +141,15 @@ unsafe fn get_instruction_mut(vm: *mut BoyiaVM, index: usize) -> *mut Instructio
     if vm.is_null() || (*vm).mVMCode.is_null() {
         return ptr::null_mut();
     }
-    let code = (*(*vm).mVMCode).mCode;
-    if code.is_null() {
-        return ptr::null_mut();
-    }
-    code.add(index)
+    (*(*vm).mVMCode).instruction_ptr(index)
 }
 
-/// Instruction pointer to index in mVMCode->mCode (matches C++ pointer difference).
+/// Instruction pointer to index in mVMCode (matches C++ pointer difference).
 unsafe fn inst_ptr_to_index(vm: *mut BoyiaVM, inst: *mut Instruction) -> usize {
     if vm.is_null() || (*vm).mVMCode.is_null() {
         return 0;
     }
-    let code = (*(*vm).mVMCode).mCode;
-    if code.is_null() || inst.is_null() {
-        return 0;
-    }
-    (inst as usize - code as usize) / mem::size_of::<Instruction>()
+    (*(*vm).mVMCode).ptr_to_index(inst).unwrap_or(0)
 }
 
 /// SetCodePosition(codeIndex, row, column, vm) in BoyiaValue.cpp: records debug position. No-op when no debugger.
