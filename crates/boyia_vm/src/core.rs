@@ -447,8 +447,6 @@ enum InitVmStage {
     GlobalsOk,
     FunTableOk,
     CpuOk,
-    StrTableOk,
-    EntryOk,
     ExecStateCacheOk,
     /// `create_exec_state` + `switch_exec_state` done; handlers not allocated yet.
     ExecStateActive,
@@ -466,8 +464,6 @@ unsafe fn init_vm_abort(vm_ptr: *mut BoyiaVM, completed: InitVmStage) -> *mut LV
     let globals_layout = Layout::array::<BoyiaValue>(NUM_GLOBAL_VARS).unwrap();
     let fun_table_layout = Layout::array::<BoyiaFunction>(NUM_FUNC).unwrap();
     let cpu_layout = Layout::new::<VMCpu>();
-    let str_table_layout = Layout::new::<VMStrTable>();
-    let entry_layout = Layout::new::<VMEntryTable>();
     let vm_layout = Layout::new::<BoyiaVM>();
     let task_queue_layout = Layout::new::<MicroTaskQueue>();
     let handlers_layout = Layout::array::<OPHandler>(65).unwrap();
@@ -489,14 +485,6 @@ unsafe fn init_vm_abort(vm_ptr: *mut BoyiaVM, completed: InitVmStage) -> *mut LV
         destroy_memory_cache(vm.mEStateCache);
         vm.mEStateCache = ptr::null_mut();
     }
-    if completed >= InitVmStage::EntryOk && !vm.mEntry.is_null() {
-        dealloc(vm.mEntry as *mut u8, entry_layout);
-        vm.mEntry = ptr::null_mut();
-    }
-    if completed >= InitVmStage::StrTableOk && !vm.mStrTable.is_null() {
-        dealloc(vm.mStrTable as *mut u8, str_table_layout);
-        vm.mStrTable = ptr::null_mut();
-    }
     if completed >= InitVmStage::CpuOk && !vm.mCpu.is_null() {
         dealloc(vm.mCpu as *mut u8, cpu_layout);
         vm.mCpu = ptr::null_mut();
@@ -511,6 +499,8 @@ unsafe fn init_vm_abort(vm_ptr: *mut BoyiaVM, completed: InitVmStage) -> *mut LV
     }
     if completed >= InitVmStage::VmShell {
         ptr::drop_in_place(&mut vm.mVMCode);
+        ptr::drop_in_place(&mut vm.mStrTable);
+        ptr::drop_in_place(&mut vm.mEntry);
         dealloc(vm_ptr as *mut u8, vm_layout);
     }
     ptr::null_mut()
@@ -531,6 +521,8 @@ pub unsafe fn init_vm(creator: *mut dyn Runtime) -> *mut LVoid {
     vm.mGValSize = 0;
     vm.mFunSize = 0;
     vm.mVMCode = VMCode::new();
+    vm.mStrTable = VMStrTable::new();
+    vm.mEntry = VMEntryTable::new();
 
     eprintln!("[init_vm] 2 alloc Globals");
     let globals_layout = Layout::array::<BoyiaValue>(NUM_GLOBAL_VARS).unwrap();
@@ -567,28 +559,12 @@ pub unsafe fn init_vm(creator: *mut dyn Runtime) -> *mut LVoid {
     };
     eprintln!("[init_vm] 4b cpu inited");
 
-    eprintln!("[init_vm] 5 init VMCode (embedded)");
+    eprintln!("[init_vm] 5 init embedded tables (VMCode/StrTable/Entry)");
 
-    eprintln!("[init_vm] 6 alloc StrTable");
-    let str_table_layout = Layout::new::<VMStrTable>();
-    vm.mStrTable = alloc_zeroed(str_table_layout) as *mut VMStrTable;
-    if vm.mStrTable.is_null() {
-        return init_vm_abort(vm_ptr, InitVmStage::CpuOk);
-    }
-    (*vm.mStrTable).mSize = 0;
-
-    eprintln!("[init_vm] 7 alloc Entry");
-    let entry_layout = Layout::new::<VMEntryTable>();
-    vm.mEntry = alloc_zeroed(entry_layout) as *mut VMEntryTable;
-    if vm.mEntry.is_null() {
-        return init_vm_abort(vm_ptr, InitVmStage::StrTableOk);
-    }
-    (*vm.mEntry).mSize = 0;
-
-    eprintln!("[init_vm] 8 alloc ExecState");
+    eprintln!("[init_vm] 6 alloc ExecState");
     vm.mEStateCache = create_exec_state_cache();
     if vm.mEStateCache.is_null() {
-        return init_vm_abort(vm_ptr, InitVmStage::EntryOk);
+        return init_vm_abort(vm_ptr, InitVmStage::CpuOk);
     }
     vm.mEState = create_exec_state(vm_ptr);
     if vm.mEState.is_null() {
@@ -638,14 +614,6 @@ pub unsafe fn destroy_vm(vm: *mut LVoid) {
         let layout = Layout::new::<VMCpu>();
         dealloc((*vm_ptr).mCpu as *mut u8, layout);
     }
-    if !(*vm_ptr).mStrTable.is_null() {
-        let layout = Layout::new::<VMStrTable>();
-        dealloc((*vm_ptr).mStrTable as *mut u8, layout);
-    }
-    if !(*vm_ptr).mEntry.is_null() {
-        let layout = Layout::new::<VMEntryTable>();
-        dealloc((*vm_ptr).mEntry as *mut u8, layout);
-    }
     if !(*vm_ptr).mEStateCache.is_null() {
         destroy_memory_cache((*vm_ptr).mEStateCache);
         (*vm_ptr).mEStateCache = ptr::null_mut();
@@ -666,6 +634,8 @@ pub unsafe fn destroy_vm(vm: *mut LVoid) {
     }
     let layout = Layout::new::<BoyiaVM>();
     ptr::drop_in_place(&mut (*vm_ptr).mVMCode);
+    ptr::drop_in_place(&mut (*vm_ptr).mStrTable);
+    ptr::drop_in_place(&mut (*vm_ptr).mEntry);
     dealloc(vm_ptr as *mut u8, layout);
 }
 
@@ -678,19 +648,13 @@ pub unsafe fn load_string_table(string_table: *mut BoyiaStr, size: LInt, vm: *mu
         return;
     }
     let vm_ptr = vm as *mut BoyiaVM;
-    if (*vm_ptr).mStrTable.is_null() {
-        return;
-    }
-    let str_table = &mut *(*vm_ptr).mStrTable;
-    let copy_size = if size > CONST_CAPACITY as i32 {
-        CONST_CAPACITY as i32
+    let str_table = &mut (*vm_ptr).mStrTable;
+    let copy_size = if size as usize > CONST_CAPACITY {
+        CONST_CAPACITY
     } else {
-        size
+        size as usize
     };
-    for i in 0..copy_size as usize {
-        str_table.mTable[i] = *string_table.add(i);
-    }
-    str_table.mSize = copy_size;
+    str_table.load_from_buffer(string_table, copy_size);
 }
 
 pub unsafe fn load_instructions(buffer: *mut LVoid, size: LInt, vm: *mut LVoid) {
@@ -709,21 +673,10 @@ pub unsafe fn load_entry_table(buffer: *mut LVoid, size: LInt, vm: *mut LVoid) {
         return;
     }
     let vm_ptr = vm as *mut BoyiaVM;
-    if (*vm_ptr).mEntry.is_null() {
-        return;
-    }
-    let entry = &mut *(*vm_ptr).mEntry;
+    let entry = &mut (*vm_ptr).mEntry;
     let int_size = mem::size_of::<LInt>();
     let count = (size as usize) / int_size;
-    if count > ENTRY_CAPACITY {
-        return;
-    }
-    entry.mSize = count as LInt;
-    ptr::copy_nonoverlapping(
-        buffer as *const LInt,
-        entry.mTable.as_mut_ptr(),
-        count,
-    );
+    entry.load_from_buffer(buffer as *const LInt, count);
 }
 
 // ---------------------------------------------------------------------------

@@ -226,7 +226,7 @@ unsafe fn create_executor(cs: *mut CompileState) {
 /// Append current chain to mEntry (matches C++ AppendEntry).
 unsafe fn append_entry(cs: *mut CompileState) {
     let vm = (*cs).mVm;
-    if vm.is_null() || (*vm).mEntry.is_null() {
+    if vm.is_null() {
         return;
     }
     let begin = (*cs).mCmds.mBegin;
@@ -234,13 +234,7 @@ unsafe fn append_entry(cs: *mut CompileState) {
         return;
     }
     let idx = inst_ptr_to_index(vm, begin);
-    let entry = &mut *(*vm).mEntry;
-    let size = entry.mSize as usize;
-    if size >= ENTRY_CAPACITY {
-        return;
-    }
-    entry.mTable[size] = idx as LInt;
-    entry.mSize += 1;
+    (*vm).mEntry.push_entry(idx as LInt);
 }
 
 /// Slice of current token name (mToken.mTokenName). Valid until next NextToken/Putback.
@@ -569,14 +563,10 @@ unsafe fn next_token(cs: *mut CompileState) {
 /// Add string from current token (STRING_VALUE) to VM string table; return index. C++ CopyStringFromToken: mPtr points to content (after opening quote), mLen = content_len+2.
 unsafe fn add_string_from_token(cs: *mut CompileState) -> Option<usize> {
     let vm = (*cs).mVm;
-    if vm.is_null() || (*vm).mStrTable.is_null() {
+    if vm.is_null() {
         return None;
     }
-    let st = &mut *(*vm).mStrTable;
-    let idx = st.mSize as usize;
-    if idx >= CONST_CAPACITY {
-        return None;
-    }
+    let st = &mut (*vm).mStrTable;
     let name = &(*cs).mToken.mTokenName;
     let inner_len = (name.mLen - 2).max(0) as usize;
     let src = name.mPtr;
@@ -589,10 +579,10 @@ unsafe fn add_string_from_token(cs: *mut CompileState) -> Option<usize> {
         *ptr.add(i) = *src.add(i);
     }
     *ptr.add(inner_len) = 0;
-    st.mTable[idx].mPtr = ptr;
-    st.mTable[idx].mLen = inner_len as LInt;
-    st.mSize += 1;
-    Some(idx)
+    st.push_str(BoyiaStr {
+        mPtr: ptr,
+        mLen: inner_len as LInt,
+    })
 }
 
 // ---------------------------------------------------------------------------

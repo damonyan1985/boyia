@@ -775,13 +775,123 @@ impl VMCode {
 }
 
 pub(crate) struct VMStrTable {
-    pub mTable: [BoyiaStr; CONST_CAPACITY],
-    pub mSize: LInt,
+    mTable: Vec<BoyiaStr>,
+}
+
+impl VMStrTable {
+    pub fn new() -> Self {
+        Self {
+            mTable: Vec::with_capacity(CONST_CAPACITY),
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.mTable.len()
+    }
+
+    #[inline]
+    pub fn size(&self) -> LInt {
+        self.mTable.len() as LInt
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.mTable.is_empty()
+    }
+
+    #[inline]
+    pub fn get(&self, index: usize) -> Option<&BoyiaStr> {
+        self.mTable.get(index)
+    }
+
+    /// Mutable pointer to string entry at `index`; null if out of range.
+    #[inline]
+    pub fn str_ptr(&mut self, index: usize) -> *mut BoyiaStr {
+        self.mTable
+            .get_mut(index)
+            .map(|s| s as *mut BoyiaStr)
+            .unwrap_or(std::ptr::null_mut())
+    }
+
+    /// Append one string; returns index or None when full.
+    pub fn push_str(&mut self, s: BoyiaStr) -> Option<usize> {
+        if self.mTable.len() >= CONST_CAPACITY {
+            return None;
+        }
+        let index = self.mTable.len();
+        self.mTable.push(s);
+        Some(index)
+    }
+
+    /// Replace all entries from a raw buffer (used by `load_string_table`).
+    pub unsafe fn load_from_buffer(&mut self, buffer: *const BoyiaStr, count: usize) -> bool {
+        if buffer.is_null() || count > CONST_CAPACITY {
+            return false;
+        }
+        self.mTable.clear();
+        if self.mTable.capacity() < count {
+            self.mTable.reserve(count - self.mTable.capacity());
+        }
+        std::ptr::copy_nonoverlapping(buffer, self.mTable.as_mut_ptr(), count);
+        self.mTable.set_len(count);
+        true
+    }
 }
 
 pub(crate) struct VMEntryTable {
-    pub mTable: [LInt; ENTRY_CAPACITY],
-    pub mSize: LInt,
+    mTable: Vec<LInt>,
+}
+
+impl VMEntryTable {
+    pub fn new() -> Self {
+        Self {
+            mTable: Vec::with_capacity(ENTRY_CAPACITY),
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.mTable.len()
+    }
+
+    #[inline]
+    pub fn size(&self) -> LInt {
+        self.mTable.len() as LInt
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.mTable.is_empty()
+    }
+
+    #[inline]
+    pub fn get(&self, index: usize) -> Option<LInt> {
+        self.mTable.get(index).copied()
+    }
+
+    /// Append one entry offset; returns false when full.
+    pub fn push_entry(&mut self, offset: LInt) -> bool {
+        if self.mTable.len() >= ENTRY_CAPACITY {
+            return false;
+        }
+        self.mTable.push(offset);
+        true
+    }
+
+    /// Replace all entries from a raw buffer (used by `load_entry_table`).
+    pub unsafe fn load_from_buffer(&mut self, buffer: *const LInt, count: usize) -> bool {
+        if buffer.is_null() || count > ENTRY_CAPACITY {
+            return false;
+        }
+        self.mTable.clear();
+        if self.mTable.capacity() < count {
+            self.mTable.reserve(count - self.mTable.capacity());
+        }
+        std::ptr::copy_nonoverlapping(buffer, self.mTable.as_mut_ptr(), count);
+        self.mTable.set_len(count);
+        true
+    }
 }
 
 pub(crate) struct MicroTask {
@@ -837,8 +947,8 @@ pub(crate) struct BoyiaVM {
     pub mEState: *mut ExecState,
     pub mEStateCache: *mut LVoid,
     pub mVMCode: VMCode,
-    pub mStrTable: *mut VMStrTable,
-    pub mEntry: *mut VMEntryTable,
+    pub mStrTable: VMStrTable,
+    pub mEntry: VMEntryTable,
     pub mHandlers: *mut OPHandler,
     pub mTaskQueue: *mut MicroTaskQueue,
     pub mFunSize: LInt,

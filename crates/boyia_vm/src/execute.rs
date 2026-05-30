@@ -1422,15 +1422,11 @@ unsafe fn handle_add_array_item(inst: *const Instruction, vm: *mut BoyiaVM) -> O
 /// HandleConstString(Instruction* inst, BoyiaVM* vm) per BoyiaCore.cpp.
 /// str = &mStrTable->mTable[inst->mOPLeft.mValue]; CreateConstString(&mReg0, str->mPtr, str->mLen, vm).
 unsafe fn handle_const_str(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
-    if (*vm).mStrTable.is_null() {
-        return OpHandleResult::kOpResultEnd;
-    }
-    let str_table = &*(*vm).mStrTable;
+    let str_table = &(*vm).mStrTable;
     let str_idx = (*inst).mOPLeft.int_value() as usize;
-    if str_idx >= str_table.mSize as usize {
+    let Some(s) = str_table.get(str_idx) else {
         return OpHandleResult::kOpResultEnd;
-    }
-    let s = &str_table.mTable[str_idx];
+    };
     let reg0 = &mut (*(*vm).mCpu).mReg0 as *mut BoyiaValue;
     if create_const_string(reg0, s.mPtr, s.mLen, vm as *mut LVoid) {
         OpHandleResult::kOpResultSuccess
@@ -1569,22 +1565,21 @@ pub unsafe fn execute_global_code(vm: *mut LVoid) {
         return;
     }
     let vm = vm as *mut BoyiaVM;
-    let entry_ptr = (*vm).mEntry;
-    if (*vm).mEState.is_null() || entry_ptr.is_null() || (*vm).mVMCode.is_empty() {
+    if (*vm).mEState.is_null() || (*vm).mEntry.is_empty() || (*vm).mVMCode.is_empty() {
         eprintln!("[execute_global_code] early return null");
         return;
     }
     reset_scene((*vm).mEState);
-    let entry = &*entry_ptr;
+    let entry = &(*vm).mEntry;
     let vmcode = &mut (*vm).mVMCode;
-    let size = entry.mSize as usize;
+    let size = entry.len();
     eprintln!("[execute_global_code] entry size={}", size);
     let mut cmds = crate::types::CommandTable {
         mBegin: ptr::null_mut(),
         mEnd: ptr::null_mut(),
     };
     for i in 0..size {
-        let entry_offset = *entry.mTable.as_ptr().add(i);
+        let entry_offset = entry.get(i).unwrap_or(0);
         cmds.mBegin = vmcode.instruction_at_offset(entry_offset as LIntPtr);
         cmds.mEnd = ptr::null_mut();
         (*(*vm).mEState).mStackFrame.mContext = &mut cmds;
