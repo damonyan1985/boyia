@@ -660,6 +660,15 @@ pub(crate) struct CommandTable {
     pub mEnd: LInt,
 }
 
+impl CommandTable {
+    pub fn new() -> Self {
+        Self {
+            mBegin: kInvalidInstruction as LInt,
+            mEnd: kInvalidInstruction as LInt,
+        }
+    }
+}
+
 pub(crate) struct StackFrame {
     pub mPC: *mut Instruction,
     pub mLValSize: LInt,

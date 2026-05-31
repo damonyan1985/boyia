@@ -1499,10 +1499,7 @@ pub(crate) unsafe fn parse_and_register(code: *mut LInt8, vm: *mut BoyiaVM) {
             mTokenValue: TokenValue::NONE,
         },
         mVm: vm,
-        mCmds: CommandTable {
-            mBegin: kInvalidInstruction as LInt,
-            mEnd: kInvalidInstruction as LInt,
-        },
+        mCmds: CommandTable::new(),
         mFunctionScopes: Vec::new(),
     };
     parse_statement(&mut cs);

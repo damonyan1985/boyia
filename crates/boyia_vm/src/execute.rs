@@ -1581,10 +1581,7 @@ pub unsafe fn execute_global_code(vm: *mut LVoid) {
     let entry = &(*vm).mEntry;
     let size = entry.len();
     eprintln!("[execute_global_code] entry size={}", size);
-    let mut cmds = crate::types::CommandTable {
-        mBegin: kInvalidInstruction as LInt,
-        mEnd: kInvalidInstruction as LInt,
-    };
+    let mut cmds = crate::types::CommandTable::new();
     for i in 0..size {
         let entry_offset = entry.get(i).unwrap_or(0);
         cmds.mBegin = entry_offset;
