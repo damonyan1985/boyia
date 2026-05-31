@@ -654,8 +654,10 @@ pub(crate) struct Instruction {
 }
 
 pub(crate) struct CommandTable {
-    pub mBegin: *mut Instruction,
-    pub mEnd: *mut Instruction,
+    /// Index of first instruction in [VMCode]; [kInvalidInstruction] when empty.
+    pub mBegin: LInt,
+    /// Index of last instruction in the chain; [kInvalidInstruction] when empty.
+    pub mEnd: LInt,
 }
 
 pub(crate) struct StackFrame {

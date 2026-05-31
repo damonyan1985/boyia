@@ -993,7 +993,8 @@ pub unsafe fn native_call_impl(
         crate::execute::assign_state_class((*vm_ptr).mEState, obj);
         let cmds = (*func).mFuncBody as *const CommandTable;
         (*(*vm_ptr).mEState).mStackFrame.mContext = cmds as *mut CommandTable;
-        (*(*vm_ptr).mEState).mStackFrame.mPC = (*cmds).mBegin;
+        (*(*vm_ptr).mEState).mStackFrame.mPC =
+            crate::execute::instruction_ptr_at(vm_ptr, (*cmds).mBegin);
         crate::execute::exec_instruction(vm_ptr);
     }
     destroy_exec_state(state, vm_ptr);

@@ -144,14 +144,6 @@ unsafe fn get_instruction_mut(vm: *mut BoyiaVM, index: usize) -> *mut Instructio
     (*vm).mVMCode.instruction_ptr(index)
 }
 
-/// Instruction pointer to index in mVMCode (matches C++ pointer difference).
-unsafe fn inst_ptr_to_index(vm: *mut BoyiaVM, inst: *mut Instruction) -> usize {
-    if vm.is_null() {
-        return 0;
-    }
-    (*vm).mVMCode.ptr_to_index(inst).unwrap_or(0)
-}
-
 /// SetCodePosition(codeIndex, row, column, vm) in BoyiaValue.cpp: records debug position. No-op when no debugger.
 #[inline]
 unsafe fn set_code_position(_code_index: usize, _row: LInt, _column: LInt, _vm: *mut BoyiaVM) {
@@ -187,16 +179,16 @@ unsafe fn put_instruction(
     (*new_ins).mNext = kInvalidInstruction;
     (*new_ins).mCache = ptr::null_mut();
 
-    // CommandTable* cmds = cs->mCmds; Instruction* inst = cmds->mEnd;
+    // CommandTable* cmds = cs->mCmds; link chain by instruction index.
     let cmds = &mut (*cs).mCmds;
-    let inst = cmds.mEnd;
-    if inst.is_null() {
-        cmds.mBegin = new_ins;
+    let end_idx = cmds.mEnd;
+    if end_idx < 0 {
+        cmds.mBegin = idx as LInt;
     } else {
-        // inst->mNext = cs->mVm->mVMCode->mSize - 1 (index of new instruction)
-        (*inst).mNext = idx as LIntPtr;
+        let prev = get_instruction_mut(vm, end_idx as usize);
+        (*prev).mNext = idx as LIntPtr;
     }
-    cmds.mEnd = new_ins;
+    cmds.mEnd = idx as LInt;
 
     set_code_position(idx, (*cs).mLineNum, (*cs).mColumnNum, vm);
     Some(idx)
@@ -219,8 +211,8 @@ unsafe fn patch_offset(vm: *mut BoyiaVM, index: usize, is_right: bool, offset: L
 
 /// Create executor: clear mCmds (matches C++ CreateExecutor).
 unsafe fn create_executor(cs: *mut CompileState) {
-    (*cs).mCmds.mBegin = ptr::null_mut();
-    (*cs).mCmds.mEnd = ptr::null_mut();
+    (*cs).mCmds.mBegin = kInvalidInstruction as LInt;
+    (*cs).mCmds.mEnd = kInvalidInstruction as LInt;
 }
 
 /// Append current chain to mEntry (matches C++ AppendEntry).
@@ -230,11 +222,10 @@ unsafe fn append_entry(cs: *mut CompileState) {
         return;
     }
     let begin = (*cs).mCmds.mBegin;
-    if begin.is_null() {
+    if begin < 0 {
         return;
     }
-    let idx = inst_ptr_to_index(vm, begin);
-    (*vm).mEntry.push_entry(idx as LInt);
+    (*vm).mEntry.push_entry(begin);
 }
 
 /// Slice of current token name (mToken.mTokenName). Valid until next NextToken/Putback.
@@ -1294,7 +1285,7 @@ unsafe fn body_statement(cs: *mut CompileState, is_function: bool) {
     let saved_begin = (*cs).mCmds.mBegin;
     let _saved_end = (*cs).mCmds.mEnd;
     // CommandTable tmpTable = { kBoyiaNull, kBoyiaNull }; Instruction* funInst = kBoyiaNull;
-    let (fun_inst_idx, exec_create_end): (Option<usize>, *mut crate::types::Instruction) = if is_function {
+    let (fun_inst_idx, exec_create_end): (Option<usize>, LInt) = if is_function {
         // if (isFunction) { funInst = PutInstruction(ExecCreate); cs->mCmds = &tmpTable; }
         let idx = put_instruction(
             cs,
@@ -1306,7 +1297,7 @@ unsafe fn body_statement(cs: *mut CompileState, is_function: bool) {
         create_executor(cs);
         (idx, exec_create_end)
     } else {
-        (None, ptr::null_mut())
+        (None, kInvalidInstruction as LInt)
     };
     // BlockStatement(cs);
     block_statement(cs);
@@ -1314,10 +1305,10 @@ unsafe fn body_statement(cs: *mut CompileState, is_function: bool) {
     if let Some(fun_idx) = fun_inst_idx {
         let tmp_begin = (*cs).mCmds.mBegin;
         let tmp_end = (*cs).mCmds.mEnd;
-        if !tmp_begin.is_null() && !tmp_end.is_null() {
+        if tmp_begin >= 0 && tmp_end >= 0 {
             let vm = (*cs).mVm;
-            patch_offset(vm, fun_idx, false, inst_ptr_to_index(vm, tmp_begin) as LIntPtr);
-            patch_offset(vm, fun_idx, true, inst_ptr_to_index(vm, tmp_end) as LIntPtr);
+            patch_offset(vm, fun_idx, false, tmp_begin as LIntPtr);
+            patch_offset(vm, fun_idx, true, tmp_end as LIntPtr);
         }
     }
     // cs->mCmds = cmds; when isFunction restore so next instruction links after ExecCreate
@@ -1463,11 +1454,15 @@ unsafe fn parse_statement(cs: *mut CompileState) {
 /// Debug: dump compiled instruction opcodes (when BOYIA_DEBUG_COMPILE=1).
 unsafe fn dump_compiled_opcodes(cs: *const CompileState) {
     let vm = (*cs).mVm;
-    let mut inst = (*cs).mCmds.mBegin;
+    let mut pc_idx = (*cs).mCmds.mBegin;
     let mut n = 0usize;
     let mut n_call_native = 0usize;
     let mut n_after_last_call_native = 0usize;
-    while !inst.is_null() {
+    while pc_idx >= 0 {
+        let inst = get_instruction_mut(vm, pc_idx as usize);
+        if inst.is_null() {
+            break;
+        }
         let op = (*inst).mOPCode;
         if op == CmdType::kCmdCallNative {
             n_call_native += 1;
@@ -1481,7 +1476,7 @@ unsafe fn dump_compiled_opcodes(cs: *const CompileState) {
         if next_idx == kInvalidInstruction {
             break;
         }
-        inst = get_instruction_mut(vm, next_idx as usize);
+        pc_idx = next_idx as LInt;
     }
     eprintln!("[compile] total instructions={}, kCmdCallNative count={}, instructions after last kCmdCallNative={}", n, n_call_native, n_after_last_call_native);
 }
@@ -1505,8 +1500,8 @@ pub(crate) unsafe fn parse_and_register(code: *mut LInt8, vm: *mut BoyiaVM) {
         },
         mVm: vm,
         mCmds: CommandTable {
-            mBegin: ptr::null_mut(),
-            mEnd: ptr::null_mut(),
+            mBegin: kInvalidInstruction as LInt,
+            mEnd: kInvalidInstruction as LInt,
         },
         mFunctionScopes: Vec::new(),
     };

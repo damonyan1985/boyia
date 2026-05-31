@@ -169,6 +169,15 @@ unsafe fn get_op_value(inst: *const Instruction, side: OpSide, vm: *mut BoyiaVM)
     }
 }
 
+/// Resolve a [VMCode] instruction index to a pointer (for [StackFrame.mPC] only).
+#[inline]
+pub(crate) unsafe fn instruction_ptr_at(vm: *mut BoyiaVM, idx: LInt) -> *mut Instruction {
+    if idx < 0 {
+        return ptr::null_mut();
+    }
+    (*vm).mVMCode.instruction_at_offset(idx as LIntPtr)
+}
+
 /// Next instruction by mNext offset; null if kInvalidInstruction. Used by core::consume_micro_task.
 #[inline]
 pub(crate) unsafe fn next_instruction(inst: *const Instruction, vm: *mut BoyiaVM) -> *mut Instruction {
@@ -847,7 +856,7 @@ unsafe fn handle_return(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleR
     (*e_state).mStackFrame.mPC = if ctx.is_null() {
         ptr::null_mut()
     } else {
-        (*ctx).mEnd
+        instruction_ptr_at(vm, (*ctx).mEnd)
     };
     OpHandleResult::kOpResultSuccess
 }
@@ -1129,13 +1138,13 @@ unsafe fn handle_call_function(inst: *const Instruction, vm: *mut BoyiaVM) -> Op
     if cmds.is_null() {
         return OpHandleResult::kOpResultEnd;
     }
-    if (*cmds).mBegin.is_null() {
+    if (*cmds).mBegin < 0 {
         return OpHandleResult::kOpResultEnd;
     }
 
     let e_state_new = (*vm).mEState;
     (*e_state_new).mStackFrame.mContext = cmds;
-    (*e_state_new).mStackFrame.mPC = (*cmds).mBegin;
+    (*e_state_new).mStackFrame.mPC = instruction_ptr_at(vm, (*cmds).mBegin);
     OpHandleResult::kOpResultJumpFun
 }
 
@@ -1289,12 +1298,11 @@ unsafe fn handle_create_executor(inst: *const Instruction, vm: *mut BoyiaVM) -> 
         return OpHandleResult::kOpResultEnd;
     }
     if (*inst).mOPLeft.int_value() != -1 {
-        let vmcode = &mut (*vm).mVMCode;
-        (*new_table).mBegin = vmcode.instruction_at_offset((*inst).mOPLeft.int_value());
-        (*new_table).mEnd = vmcode.instruction_at_offset((*inst).mOPRight.int_value());
+        (*new_table).mBegin = (*inst).mOPLeft.int_value() as LInt;
+        (*new_table).mEnd = (*inst).mOPRight.int_value() as LInt;
     } else {
-        (*new_table).mBegin = ptr::null_mut();
-        (*new_table).mEnd = ptr::null_mut();
+        (*new_table).mBegin = kInvalidInstruction as LInt;
+        (*new_table).mEnd = kInvalidInstruction as LInt;
     }
     if (*vm).mFunSize > 0 {
         let fun = (*vm).mFunTable.add((*vm).mFunSize as usize - 1);
@@ -1571,17 +1579,16 @@ pub unsafe fn execute_global_code(vm: *mut LVoid) {
     }
     reset_scene((*vm).mEState);
     let entry = &(*vm).mEntry;
-    let vmcode = &mut (*vm).mVMCode;
     let size = entry.len();
     eprintln!("[execute_global_code] entry size={}", size);
     let mut cmds = crate::types::CommandTable {
-        mBegin: ptr::null_mut(),
-        mEnd: ptr::null_mut(),
+        mBegin: kInvalidInstruction as LInt,
+        mEnd: kInvalidInstruction as LInt,
     };
     for i in 0..size {
         let entry_offset = entry.get(i).unwrap_or(0);
-        cmds.mBegin = vmcode.instruction_at_offset(entry_offset as LIntPtr);
-        cmds.mEnd = ptr::null_mut();
+        cmds.mBegin = entry_offset;
+        cmds.mEnd = kInvalidInstruction as LInt;
         (*(*vm).mEState).mStackFrame.mContext = &mut cmds;
         execute_code(vm as *mut LVoid);
     }
@@ -1602,7 +1609,7 @@ pub unsafe fn execute_code(vm: *mut LVoid) {
     }
     let begin = (*ctx).mBegin;
     eprintln!("[execute_code] mBegin={:?}", begin);
-    (*e_state).mStackFrame.mPC = begin;
+    (*e_state).mStackFrame.mPC = instruction_ptr_at(vm, begin);
     eprintln!("[execute_code] calling exec_instruction");
     exec_instruction(vm);
     reset_scene((*vm).mEState);
