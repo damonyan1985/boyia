@@ -183,12 +183,12 @@ unsafe fn put_instruction(
     let cmds = &mut (*cs).mCmds;
     let end_idx = cmds.mEnd;
     if end_idx < 0 {
-        cmds.mBegin = idx as LInt;
+        cmds.mBegin = idx as LIntPtr;
     } else {
         let prev = get_instruction_mut(vm, end_idx as usize);
         (*prev).mNext = idx as LIntPtr;
     }
-    cmds.mEnd = idx as LInt;
+    cmds.mEnd = idx as LIntPtr;
 
     set_code_position(idx, (*cs).mLineNum, (*cs).mColumnNum, vm);
     Some(idx)
@@ -211,8 +211,8 @@ unsafe fn patch_offset(vm: *mut BoyiaVM, index: usize, is_right: bool, offset: L
 
 /// Create executor: clear mCmds (matches C++ CreateExecutor).
 unsafe fn create_executor(cs: *mut CompileState) {
-    (*cs).mCmds.mBegin = kInvalidInstruction as LInt;
-    (*cs).mCmds.mEnd = kInvalidInstruction as LInt;
+    (*cs).mCmds.mBegin = kInvalidInstruction;
+    (*cs).mCmds.mEnd = kInvalidInstruction;
 }
 
 /// Append current chain to mEntry (matches C++ AppendEntry).
@@ -225,7 +225,7 @@ unsafe fn append_entry(cs: *mut CompileState) {
     if begin < 0 {
         return;
     }
-    (*vm).mEntry.push_entry(begin);
+    (*vm).mEntry.push_entry(begin as LInt);
 }
 
 /// Slice of current token name (mToken.mTokenName). Valid until next NextToken/Putback.
@@ -1285,7 +1285,7 @@ unsafe fn body_statement(cs: *mut CompileState, is_function: bool) {
     let saved_begin = (*cs).mCmds.mBegin;
     let _saved_end = (*cs).mCmds.mEnd;
     // CommandTable tmpTable = { kBoyiaNull, kBoyiaNull }; Instruction* funInst = kBoyiaNull;
-    let (fun_inst_idx, exec_create_end): (Option<usize>, LInt) = if is_function {
+    let (fun_inst_idx, exec_create_end): (Option<usize>, LIntPtr) = if is_function {
         // if (isFunction) { funInst = PutInstruction(ExecCreate); cs->mCmds = &tmpTable; }
         let idx = put_instruction(
             cs,
@@ -1297,7 +1297,7 @@ unsafe fn body_statement(cs: *mut CompileState, is_function: bool) {
         create_executor(cs);
         (idx, exec_create_end)
     } else {
-        (None, kInvalidInstruction as LInt)
+        (None, kInvalidInstruction)
     };
     // BlockStatement(cs);
     block_statement(cs);
@@ -1307,8 +1307,8 @@ unsafe fn body_statement(cs: *mut CompileState, is_function: bool) {
         let tmp_end = (*cs).mCmds.mEnd;
         if tmp_begin >= 0 && tmp_end >= 0 {
             let vm = (*cs).mVm;
-            patch_offset(vm, fun_idx, false, tmp_begin as LIntPtr);
-            patch_offset(vm, fun_idx, true, tmp_end as LIntPtr);
+            patch_offset(vm, fun_idx, false, tmp_begin);
+            patch_offset(vm, fun_idx, true, tmp_end);
         }
     }
     // cs->mCmds = cmds; when isFunction restore so next instruction links after ExecCreate
@@ -1476,7 +1476,7 @@ unsafe fn dump_compiled_opcodes(cs: *const CompileState) {
         if next_idx == kInvalidInstruction {
             break;
         }
-        pc_idx = next_idx as LInt;
+        pc_idx = next_idx;
     }
     eprintln!("[compile] total instructions={}, kCmdCallNative count={}, instructions after last kCmdCallNative={}", n, n_call_native, n_after_last_call_native);
 }

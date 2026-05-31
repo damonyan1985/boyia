@@ -171,11 +171,11 @@ unsafe fn get_op_value(inst: *const Instruction, side: OpSide, vm: *mut BoyiaVM)
 
 /// Resolve a [VMCode] instruction index to a pointer (for [StackFrame.mPC] only).
 #[inline]
-pub(crate) unsafe fn instruction_ptr_at(vm: *mut BoyiaVM, idx: LInt) -> *mut Instruction {
+pub(crate) unsafe fn instruction_ptr_at(vm: *mut BoyiaVM, idx: LIntPtr) -> *mut Instruction {
     if idx < 0 {
         return ptr::null_mut();
     }
-    (*vm).mVMCode.instruction_at_offset(idx as LIntPtr)
+    (*vm).mVMCode.instruction_at_offset(idx)
 }
 
 /// Next instruction by mNext offset; null if kInvalidInstruction. Used by core::consume_micro_task.
@@ -1298,11 +1298,11 @@ unsafe fn handle_create_executor(inst: *const Instruction, vm: *mut BoyiaVM) -> 
         return OpHandleResult::kOpResultEnd;
     }
     if (*inst).mOPLeft.int_value() != -1 {
-        (*new_table).mBegin = (*inst).mOPLeft.int_value() as LInt;
-        (*new_table).mEnd = (*inst).mOPRight.int_value() as LInt;
+        (*new_table).mBegin = (*inst).mOPLeft.int_value();
+        (*new_table).mEnd = (*inst).mOPRight.int_value();
     } else {
-        (*new_table).mBegin = kInvalidInstruction as LInt;
-        (*new_table).mEnd = kInvalidInstruction as LInt;
+        (*new_table).mBegin = kInvalidInstruction;
+        (*new_table).mEnd = kInvalidInstruction;
     }
     if (*vm).mFunSize > 0 {
         let fun = (*vm).mFunTable.add((*vm).mFunSize as usize - 1);
@@ -1584,8 +1584,8 @@ pub unsafe fn execute_global_code(vm: *mut LVoid) {
     let mut cmds = crate::types::CommandTable::new();
     for i in 0..size {
         let entry_offset = entry.get(i).unwrap_or(0);
-        cmds.mBegin = entry_offset;
-        cmds.mEnd = kInvalidInstruction as LInt;
+        cmds.mBegin = entry_offset as LIntPtr;
+        cmds.mEnd = kInvalidInstruction;
         (*(*vm).mEState).mStackFrame.mContext = &mut cmds;
         execute_code(vm as *mut LVoid);
     }

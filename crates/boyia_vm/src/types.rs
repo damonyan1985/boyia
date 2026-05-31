@@ -655,16 +655,16 @@ pub(crate) struct Instruction {
 
 pub(crate) struct CommandTable {
     /// Index of first instruction in [VMCode]; [kInvalidInstruction] when empty.
-    pub mBegin: LInt,
+    pub mBegin: LIntPtr,
     /// Index of last instruction in the chain; [kInvalidInstruction] when empty.
-    pub mEnd: LInt,
+    pub mEnd: LIntPtr,
 }
 
 impl CommandTable {
     pub fn new() -> Self {
         Self {
-            mBegin: kInvalidInstruction as LInt,
-            mEnd: kInvalidInstruction as LInt,
+            mBegin: kInvalidInstruction,
+            mEnd: kInvalidInstruction,
         }
     }
 }
