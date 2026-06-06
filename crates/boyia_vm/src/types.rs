@@ -944,8 +944,8 @@ pub(crate) struct ExecState {
     pub mWait: LBool,
 }
 
-// Main VM structure. mCreator is *mut dyn Runtime (fat pointer). Not exposed in public API.
-pub(crate) struct BoyiaVM {
+// Main VM structure. mCreator is *mut dyn Runtime (fat pointer).
+pub struct BoyiaVM {
     pub mFunTable: *mut BoyiaFunction,
     pub mGlobals: *mut BoyiaValue,
     pub mGValSize: LInt,

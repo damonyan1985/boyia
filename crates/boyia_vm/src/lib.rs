@@ -55,6 +55,7 @@ pub use core::{
     get_vm_creator,
     set_int_result,
     init_vm,
+    init_vm_boxed,
     destroy_vm,
     load_string_table,
     load_instructions,

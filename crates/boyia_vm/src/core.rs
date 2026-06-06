@@ -506,14 +506,21 @@ unsafe fn init_vm_abort(vm_ptr: *mut BoyiaVM, completed: InitVmStage) -> *mut LV
     ptr::null_mut()
 }
 
-/// Initialize VM with runtime (creator). Allocation is done via [Runtime::new_data]/[Runtime::delete_data].
+/// Initialize VM with runtime (creator). Returns null on failure.
 pub unsafe fn init_vm(creator: *mut dyn Runtime) -> *mut LVoid {
+    init_vm_boxed(creator)
+        .map(|vm| Box::into_raw(vm) as *mut LVoid)
+        .unwrap_or(ptr::null_mut())
+}
+
+/// Initialize VM with runtime (creator). Returns `None` on failure.
+pub unsafe fn init_vm_boxed(creator: *mut dyn Runtime) -> Option<Box<BoyiaVM>> {
     eprintln!("[init_vm] 1 alloc BoyiaVM");
     let layout = Layout::new::<BoyiaVM>();
     let vm_ptr = alloc_zeroed(layout) as *mut BoyiaVM;
     if vm_ptr.is_null() {
         eprintln!("[init_vm] ERROR vm_ptr null");
-        return ptr::null_mut();
+        return None;
     }
     let vm = &mut *vm_ptr;
     vm.mCreator = creator;
@@ -529,21 +536,24 @@ pub unsafe fn init_vm(creator: *mut dyn Runtime) -> *mut LVoid {
     vm.mGlobals = alloc_zeroed(globals_layout) as *mut BoyiaValue;
     if vm.mGlobals.is_null() {
         eprintln!("[init_vm] ERROR mGlobals alloc null");
-        return init_vm_abort(vm_ptr, InitVmStage::VmShell);
+        init_vm_abort(vm_ptr, InitVmStage::VmShell);
+        return None;
     }
 
     eprintln!("[init_vm] 3 alloc FunTable");
     let fun_table_layout = Layout::array::<BoyiaFunction>(NUM_FUNC).unwrap();
     vm.mFunTable = alloc_zeroed(fun_table_layout) as *mut BoyiaFunction;
     if vm.mFunTable.is_null() {
-        return init_vm_abort(vm_ptr, InitVmStage::GlobalsOk);
+        init_vm_abort(vm_ptr, InitVmStage::GlobalsOk);
+        return None;
     }
 
     eprintln!("[init_vm] 4 alloc Cpu");
     let cpu_layout = Layout::new::<VMCpu>();
     vm.mCpu = alloc_zeroed(cpu_layout) as *mut VMCpu;
     if vm.mCpu.is_null() {
-        return init_vm_abort(vm_ptr, InitVmStage::FunTableOk);
+        init_vm_abort(vm_ptr, InitVmStage::FunTableOk);
+        return None;
     }
     eprintln!("[init_vm] 4a cpu ptr ok");
     let cpu = &mut *vm.mCpu;
@@ -564,11 +574,13 @@ pub unsafe fn init_vm(creator: *mut dyn Runtime) -> *mut LVoid {
     eprintln!("[init_vm] 6 alloc ExecState");
     vm.mEStateCache = create_exec_state_cache();
     if vm.mEStateCache.is_null() {
-        return init_vm_abort(vm_ptr, InitVmStage::CpuOk);
+        init_vm_abort(vm_ptr, InitVmStage::CpuOk);
+        return None;
     }
     vm.mEState = create_exec_state(vm_ptr);
     if vm.mEState.is_null() {
-        return init_vm_abort(vm_ptr, InitVmStage::ExecStateCacheOk);
+        init_vm_abort(vm_ptr, InitVmStage::ExecStateCacheOk);
+        return None;
     }
     switch_exec_state(vm.mEState, vm_ptr);
 
@@ -576,12 +588,14 @@ pub unsafe fn init_vm(creator: *mut dyn Runtime) -> *mut LVoid {
     let handlers_layout = Layout::array::<OPHandler>(65).unwrap();
     vm.mHandlers = alloc_zeroed(handlers_layout) as *mut OPHandler;
     if vm.mHandlers.is_null() {
-        return init_vm_abort(vm_ptr, InitVmStage::ExecStateActive);
+        init_vm_abort(vm_ptr, InitVmStage::ExecStateActive);
+        return None;
     }
     let task_queue_layout = Layout::new::<MicroTaskQueue>();
     vm.mTaskQueue = alloc_zeroed(task_queue_layout) as *mut MicroTaskQueue;
     if vm.mTaskQueue.is_null() {
-        return init_vm_abort(vm_ptr, InitVmStage::HandlersOk);
+        init_vm_abort(vm_ptr, InitVmStage::HandlersOk);
+        return None;
     }
     (*vm.mTaskQueue).mUsedTasks.mHead = ptr::null_mut();
     (*vm.mTaskQueue).mUsedTasks.mEnd = ptr::null_mut();
@@ -589,10 +603,58 @@ pub unsafe fn init_vm(creator: *mut dyn Runtime) -> *mut LVoid {
     (*vm.mTaskQueue).mAllocTasks.mEnd = ptr::null_mut();
     (*vm.mTaskQueue).mTaskCache = create_micro_task_cache();
     if (*vm.mTaskQueue).mTaskCache.is_null() {
-        return init_vm_abort(vm_ptr, InitVmStage::TaskQueueShell);
+        init_vm_abort(vm_ptr, InitVmStage::TaskQueueShell);
+        return None;
     }
     eprintln!("[init_vm] 10 done");
-    vm_ptr as *mut LVoid
+    Some(Box::from_raw(vm_ptr))
+}
+
+unsafe fn drop_vm_owned_resources(vm: &mut BoyiaVM) {
+    if !vm.mGlobals.is_null() {
+        let layout = Layout::array::<BoyiaValue>(NUM_GLOBAL_VARS).unwrap();
+        dealloc(vm.mGlobals as *mut u8, layout);
+        vm.mGlobals = ptr::null_mut();
+    }
+    if !vm.mFunTable.is_null() {
+        // mParams of each function are from memory pool; only free the table array.
+        let layout = Layout::array::<BoyiaFunction>(NUM_FUNC).unwrap();
+        dealloc(vm.mFunTable as *mut u8, layout);
+        vm.mFunTable = ptr::null_mut();
+    }
+    if !vm.mCpu.is_null() {
+        let layout = Layout::new::<VMCpu>();
+        dealloc(vm.mCpu as *mut u8, layout);
+        vm.mCpu = ptr::null_mut();
+    }
+    if !vm.mEStateCache.is_null() {
+        destroy_memory_cache(vm.mEStateCache);
+        vm.mEStateCache = ptr::null_mut();
+    }
+    if !vm.mHandlers.is_null() {
+        let layout = Layout::array::<OPHandler>(65).unwrap();
+        dealloc(vm.mHandlers as *mut u8, layout);
+        vm.mHandlers = ptr::null_mut();
+    }
+    if !vm.mTaskQueue.is_null() {
+        let q = vm.mTaskQueue;
+        if !(*q).mTaskCache.is_null() {
+            destroy_memory_cache((*q).mTaskCache);
+            (*q).mTaskCache = ptr::null_mut();
+        }
+        let layout = Layout::new::<MicroTaskQueue>();
+        dealloc(q as *mut u8, layout);
+        vm.mTaskQueue = ptr::null_mut();
+    }
+    // Embedded tables (`mVMCode`, `mStrTable`, `mEntry`) are dropped by Rust after `Drop::drop` returns.
+}
+
+impl Drop for BoyiaVM {
+    fn drop(&mut self) {
+        unsafe {
+            drop_vm_owned_resources(self);
+        }
+    }
 }
 
 /// Destroy VM and free all allocated memory.
@@ -600,43 +662,7 @@ pub unsafe fn destroy_vm(vm: *mut LVoid) {
     if vm.is_null() {
         return;
     }
-    let vm_ptr = vm as *mut BoyiaVM;
-    if !(*vm_ptr).mGlobals.is_null() {
-        let layout = Layout::array::<BoyiaValue>(NUM_GLOBAL_VARS).unwrap();
-        dealloc((*vm_ptr).mGlobals as *mut u8, layout);
-    }
-    if !(*vm_ptr).mFunTable.is_null() {
-        // mParams of each function are from memory pool (freed above); only free the table array.
-        let layout = Layout::array::<BoyiaFunction>(NUM_FUNC).unwrap();
-        dealloc((*vm_ptr).mFunTable as *mut u8, layout);
-    }
-    if !(*vm_ptr).mCpu.is_null() {
-        let layout = Layout::new::<VMCpu>();
-        dealloc((*vm_ptr).mCpu as *mut u8, layout);
-    }
-    if !(*vm_ptr).mEStateCache.is_null() {
-        destroy_memory_cache((*vm_ptr).mEStateCache);
-        (*vm_ptr).mEStateCache = ptr::null_mut();
-    }
-    if !(*vm_ptr).mHandlers.is_null() {
-        let layout = Layout::array::<OPHandler>(65).unwrap();
-        dealloc((*vm_ptr).mHandlers as *mut u8, layout);
-    }
-    if !(*vm_ptr).mTaskQueue.is_null() {
-        let q = (*vm_ptr).mTaskQueue;
-        if !(*q).mTaskCache.is_null() {
-            destroy_memory_cache((*q).mTaskCache);
-            (*q).mTaskCache = ptr::null_mut();
-        }
-        let layout = Layout::new::<MicroTaskQueue>();
-        dealloc(q as *mut u8, layout);
-        (*vm_ptr).mTaskQueue = ptr::null_mut();
-    }
-    let layout = Layout::new::<BoyiaVM>();
-    ptr::drop_in_place(&mut (*vm_ptr).mVMCode);
-    ptr::drop_in_place(&mut (*vm_ptr).mStrTable);
-    ptr::drop_in_place(&mut (*vm_ptr).mEntry);
-    dealloc(vm_ptr as *mut u8, layout);
+    drop(Box::from_raw(vm as *mut BoyiaVM));
 }
 
 // ---------------------------------------------------------------------------

@@ -11,8 +11,8 @@ use boyia_builtins::{
 };
 use boyia_vm::{
     cache_vm_code, consume_micro_task, delete_data, execute_global_code,
-    free_memory_pool, init_memory_pool, init_vm, new_data,
-    BoyiaFunction, BoyiaStr, BoyiaValue, Global, GlobalList, K_BOYIA_NULL, LInt, LUintPtr, LVoid,
+    free_memory_pool, init_memory_pool, init_vm_boxed, new_data,
+    BoyiaFunction, BoyiaStr, BoyiaVM, BoyiaValue, Global, GlobalList, K_BOYIA_NULL, LInt, LUintPtr, LVoid,
     NativeFunction, NativePtr, OpHandleResult, Runtime, ValueType,
 };
 use std::ptr;
@@ -24,10 +24,10 @@ const K_MEMORY_POOL_SIZE: LInt = 6 * 1024 * 1024;
 /// Runtime state: VM + native table + id creator + memory pool + GC. Matches BoyiaRuntime.cpp.
 pub struct BoyiaRuntime {
     /// VM instance (creator set to self for native dispatch).
-    vm: *mut LVoid,
-    /// Memory pool for object allocation (BoyiaRuntime::m_memoryPool). Created in init(); freed in Drop after destroy_vm.
+    vm: Option<Box<BoyiaVM>>,
+    /// Memory pool for object allocation (BoyiaRuntime::m_memoryPool). Created in init(); freed in Drop after VM drop.
     memory_pool: *mut LVoid,
-    /// GC state (BoyiaRuntime::m_gc). Created in init() after VM; destroyed in Drop before destroy_vm.
+    /// GC state (BoyiaRuntime::m_gc). Created in init() after VM; destroyed in Drop before VM drop.
     gc: *mut boyia_gc::BoyiaGc,
     /// Native function table: (name_key, ptr). Terminated by mAddr == null (we use 0 index as sentinel or check length).
     native_fun_table: Vec<NativeFunction>,
@@ -45,7 +45,7 @@ impl BoyiaRuntime {
     /// After `init()`, the runtime must not be moved (e.g. use `Box<BoyiaRuntime>`) so that the VM's mCreator stays valid.
     fn new() -> Self {
         Self {
-            vm: ptr::null_mut(),
+            vm: None,
             memory_pool: ptr::null_mut(),
             gc: ptr::null_mut(),
             native_fun_table: Vec::with_capacity(K_NATIVE_FUNCTION_CAPACITY),
@@ -65,13 +65,13 @@ impl BoyiaRuntime {
             return;
         }
         eprintln!("[init] 2 init_vm");
-        self.vm = unsafe { init_vm(self as &mut dyn Runtime as *mut dyn Runtime) };
-        if self.vm.is_null() {
+        self.vm = unsafe { init_vm_boxed(self as &mut dyn Runtime as *mut dyn Runtime) };
+        if self.vm.is_none() {
             eprintln!("[init] ERROR init_vm returned null");
             return;
         }
         eprintln!("[init] 2a create_gc");
-        self.gc = unsafe { boyia_gc::create_gc(self.vm) };
+        self.gc = unsafe { boyia_gc::create_gc(self.vm_ptr()) };
         if self.gc.is_null() {
             eprintln!("[init] WARN create_gc returned null");
         }
@@ -89,16 +89,17 @@ impl BoyiaRuntime {
 
         eprintln!("[init] 4 builtin_string_class");
         // Builtin classes: use BuiltinId keys per BoyiaValue.h (CreateGlobalClass(kBoyiaString, vm) etc.)
+        let vm = self.vm_ptr();
         let mut gen_id = |s: &str| self.id_creator.gen_ident_by_str(s);
-        builtin_string_class(self.vm, &mut gen_id);
+        builtin_string_class(vm, &mut gen_id);
         eprintln!("[init] 5 builtin_map_class");
-        builtin_map_class(self.vm, &mut gen_id);
+        builtin_map_class(vm, &mut gen_id);
         eprintln!("[init] 6 builtin_micro_task_class");
-        builtin_micro_task_class(self.vm, &mut gen_id);
+        builtin_micro_task_class(vm, &mut gen_id);
         eprintln!("[init] 7 builtin_array_class");
-        builtin_array_class(self.vm, &mut gen_id);
+        builtin_array_class(vm, &mut gen_id);
         eprintln!("[init] 7b builtin_json_class");
-        builtin_json_class(self.vm, &mut gen_id);
+        builtin_json_class(vm, &mut gen_id);
 
         eprintln!("[init] 8 done");
     }
@@ -126,11 +127,11 @@ impl BoyiaRuntime {
         if self.memory_pool.is_null() {
             return;
         }
-        self.vm = unsafe { init_vm(self as &mut dyn Runtime as *mut dyn Runtime) };
-        if self.vm.is_null() {
+        self.vm = unsafe { init_vm_boxed(self as &mut dyn Runtime as *mut dyn Runtime) };
+        if self.vm.is_none() {
             return;
         }
-        self.gc = unsafe { boyia_gc::create_gc(self.vm) };
+        self.gc = unsafe { boyia_gc::create_gc(self.vm_ptr()) };
         self.id_creator.gen_ident_by_str("this");
         self.id_creator.gen_ident_by_str("String");
         self.init_native_function();
@@ -162,7 +163,7 @@ impl BoyiaRuntime {
 
     /// Compile script source into the VM (`BoyiaCompileInfo::compile` / `CompileCode`).
     pub fn compile(&mut self, script: &str) {
-        self.compile_info.compile_string(script, self.vm);
+        self.compile_info.compile_string(script, self.vm_ptr());
     }
 
     /// Set the entry script path used to resolve relative `require` at runtime (e.g. CLI `main.boyia`).
@@ -173,12 +174,19 @@ impl BoyiaRuntime {
     /// C++ `BoyiaRuntime::compileFile` → `m_compileInfo->compileFile(path)`.
     pub fn compile_file(&mut self, path: &str) {
         self.compile_info
-            .compile_file(path, self.vm, &mut self.id_creator);
+            .compile_file(path, self.vm_ptr(), &mut self.id_creator);
     }
 
     /// VM pointer for use with boyia_vm APIs.
     pub fn vm(&self) -> *mut LVoid {
+        self.vm_ptr()
+    }
+
+    fn vm_ptr(&self) -> *mut LVoid {
         self.vm
+            .as_ref()
+            .map(|vm| vm.as_ref() as *const BoyiaVM as *mut LVoid)
+            .unwrap_or(ptr::null_mut())
     }
 
     /// Id creator for string keys.
@@ -193,21 +201,21 @@ impl BoyiaRuntime {
     /// Run global code (entry table). Match ExecuteGlobalCode.
     pub fn run_exe_file(&self) {
         unsafe {
-            execute_global_code(self.vm);
+            execute_global_code(self.vm_ptr());
         }
     }
 
     /// Cache VM code (patch instructions). Match CacheVMCode.
     pub fn cache_code(&self) {
         unsafe {
-            cache_vm_code(self.vm);
+            cache_vm_code(self.vm_ptr());
         }
     }
 
     /// Consume micro tasks in the queue.
     pub fn consume_micro_task(&self) {
         unsafe {
-            consume_micro_task(self.vm);
+            consume_micro_task(self.vm_ptr());
         }
     }
 }
@@ -221,7 +229,7 @@ impl Runtime for BoyiaRuntime {
         self.gc as *mut LVoid
     }
     fn vm_ptr(&self) -> *mut LVoid {
-        self.vm
+        BoyiaRuntime::vm_ptr(self)
     }
 
     fn gc_append_ref(&self, address: *mut LVoid, type_: boyia_vm::ValueType) {
@@ -264,7 +272,7 @@ impl Runtime for BoyiaRuntime {
         if nf.mAddr as *const () == sentinel_native as *const () {
             return OpHandleResult::kOpResultEnd as i32;
         }
-        unsafe { (nf.mAddr)(self.vm) as i32 }
+        unsafe { (nf.mAddr)(self.vm_ptr()) as i32 }
     }
 
     fn gen_identifier(&mut self, key: &str) -> LUintPtr {
@@ -282,7 +290,7 @@ impl Runtime for BoyiaRuntime {
     fn new_data(&self, size: LInt) -> *mut LVoid {
         unsafe {
             if !self.gc.is_null() {
-                boyia_gc::gc_collect_garbage(self.gc, self.vm);
+                boyia_gc::gc_collect_garbage(self.gc, self.vm_ptr());
             }
             new_data(size, self.memory_pool)
         }
@@ -345,7 +353,7 @@ impl Runtime for BoyiaRuntime {
 
     fn compile_script_file(&mut self, resolved_path: &str) {
         self.compile_info
-            .compile_file(resolved_path, self.vm, &mut self.id_creator);
+            .compile_file(resolved_path, self.vm_ptr(), &mut self.id_creator);
     }
 }
 
@@ -362,13 +370,12 @@ impl Drop for BoyiaRuntime {
                 boyia_gc::destroy_gc(self.gc);
                 self.gc = ptr::null_mut();
             }
-            boyia_vm::destroy_vm(self.vm);
+            drop(self.vm.take());
             if !self.memory_pool.is_null() {
                 free_memory_pool(self.memory_pool);
                 self.memory_pool = ptr::null_mut();
             }
         }
-        self.vm = ptr::null_mut();
     }
 }
 

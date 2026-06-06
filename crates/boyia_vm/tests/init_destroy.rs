@@ -41,6 +41,7 @@ impl Runtime for TestRuntime {
     }
     fn iterate_persistent(&mut self, _f: &mut dyn FnMut(*mut BoyiaValue)) {}
     fn remove_persistent(&mut self, _ptr: *mut boyia_vm::Global) {}
+    fn compile_script_file(&mut self, _resolved_path: &str) {}
 }
 
 #[test]
