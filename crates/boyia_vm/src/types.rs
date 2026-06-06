@@ -376,7 +376,6 @@ pub enum OpInstType {
 pub const kInvalidInstruction: LIntPtr = -1;
 
 /// Handler return type: use OpHandleResult for dispatch.
-pub(crate) type OPHandler = unsafe fn(*mut Instruction, *mut BoyiaVM) -> OpHandleResult;
 
 // BoyiaValue types matching BoyiaValue.h
 #[derive(Clone, Copy)]
@@ -961,7 +960,6 @@ pub struct BoyiaVM {
     pub(crate) mVMCode: VMCode,
     pub(crate) mStrTable: VMStrTable,
     pub(crate) mEntry: VMEntryTable,
-    pub(crate) mHandlers: *mut OPHandler,
     pub(crate) mTaskQueue: *mut MicroTaskQueue,
     pub(crate) mFunSize: LInt,
     pub(crate) mCreator: *mut dyn Runtime,

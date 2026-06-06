@@ -267,7 +267,7 @@ unsafe fn exec_pop_function(vm: *mut BoyiaVM) {
     if e_state.is_null() || (*e_state).mFrameIndex <= 0 {
         return;
     }
-    let _ = handle_pop_scene(ptr::null(), vm);
+    let _ = handle_pop_scene(None, &mut *vm);
     let e_state = (*vm).mEState;
     if e_state.is_null() {
         return;
@@ -282,11 +282,11 @@ unsafe fn exec_pop_function(vm: *mut BoyiaVM) {
 }
 
 /// Single handler dispatch: returns OpHandleResult.
-unsafe fn dispatch_instruction(inst: *mut Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
-    if inst.is_null() || vm.is_null() {
+unsafe fn dispatch_instruction(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
+    if vm.mEState.is_null() {
         return OpHandleResult::kOpResultEnd;
     }
-    let opcode = (*inst).mOPCode;
+    let opcode = inst.mOPCode;
     //eprintln!("[dispatch_instruction] mOPCode={:?}", opcode);
     match opcode {
         CmdType::kCmdNone => OpHandleResult::kOpResultEnd,
@@ -300,13 +300,13 @@ unsafe fn dispatch_instruction(inst: *mut Instruction, vm: *mut BoyiaVM) -> OpHa
         CmdType::kCmdMul => handle_mul(inst, vm),
         CmdType::kCmdDiv => handle_div(inst, vm),
         CmdType::kCmdMod => handle_mod(inst, vm),
-        CmdType::kCmdPushScene => handle_push_scene(inst, vm),
-        CmdType::kCmdPopScene => handle_pop_scene(inst, vm),
+        CmdType::kCmdPushScene => handle_push_scene(Some(inst), vm),
+        CmdType::kCmdPopScene => handle_pop_scene(Some(inst), vm),
         CmdType::kCmdPushArg => handle_push_arg(inst, vm),
         CmdType::kCmdPushObj => handle_push_obj(inst, vm),
         CmdType::kCmdAssign => handle_assignment(inst, vm),
         CmdType::kCmdJmpTrue => handle_jump_to_if_true(inst, vm),
-        CmdType::kCmdOnceJmpTrue => handle_once_jmp_true(inst as *mut Instruction, vm),
+        CmdType::kCmdOnceJmpTrue => handle_once_jmp_true(inst, vm),
         CmdType::kCmdIfEnd => handle_if_end(inst, vm),
         CmdType::kCmdJmpTo => handle_jump_to(inst, vm),
         CmdType::kCmdLoop => handle_loop_begin(inst, vm),
@@ -350,8 +350,8 @@ unsafe fn dispatch_instruction(inst: *mut Instruction, vm: *mut BoyiaVM) -> OpHa
 
 // ---------- Handlers (match BoyiaCore.cpp) ----------
 
-unsafe fn handle_decl_global(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
-    if vm.is_null() || (*vm).mGlobals.is_null() {
+unsafe fn handle_decl_global(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
+    if vm.mGlobals.is_null() {
         return OpHandleResult::kOpResultEnd;
     }
     let type_val = (*inst).mOPLeft.int_value() as u8;
@@ -365,7 +365,7 @@ unsafe fn handle_decl_global(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHa
 }
 
 /// HandleDeclLocal: strictly matches BoyiaCore.cpp. BoyiaValue local; local.mValueType = inst->mOPLeft.mValue; local.mNameKey = (LUintPtr)inst->mOPRight.mValue; LocalPush(&local, vm).
-unsafe fn handle_decl_local(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_decl_local(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let mut local = BoyiaValue {
         mNameKey: 0,
         mValueType: std::mem::transmute((*inst).mOPLeft.int_value() as u8),
@@ -377,8 +377,8 @@ unsafe fn handle_decl_local(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHan
 }
 
 /// Pop N persistent local slots (block exit); matches BoyiaCore.cpp HandlePopLocals / kCmdPopLocals.
-unsafe fn handle_pop_locals(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
-    if vm.is_null() || (*vm).mEState.is_null() {
+unsafe fn handle_pop_locals(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
+    if vm.mEState.is_null() {
         return OpHandleResult::kOpResultEnd;
     }
     let e = (*vm).mEState;
@@ -399,7 +399,7 @@ unsafe fn handle_pop_locals(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHan
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn handle_push(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_push(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let value = if (*inst).mOPLeft.mType == OpType::OP_REG0 {
         &(*vm).mCpu.mReg0 as *const BoyiaValue as *mut BoyiaValue
     } else {
@@ -418,7 +418,7 @@ unsafe fn handle_push(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleRes
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn handle_pop(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_pop(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let e_state = (*vm).mEState;
     if e_state.is_null() || (*e_state).mStackFrame.mResultNum <= 0 {
         return OpHandleResult::kOpResultEnd;
@@ -439,7 +439,7 @@ unsafe fn handle_pop(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResu
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn handle_add(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_add(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let left = get_op_value(inst, OpSide::OpLeft, vm);
     let right = get_op_value(inst, OpSide::OpRight, vm);
     if left.is_null() || right.is_null() {
@@ -467,7 +467,7 @@ unsafe fn handle_add(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResu
     OpHandleResult::kOpResultEnd
 }
 
-unsafe fn handle_sub(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_sub(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let left = get_op_value(inst, OpSide::OpLeft, vm);
     let right = get_op_value(inst, OpSide::OpRight, vm);
     if left.is_null() || right.is_null() {
@@ -487,7 +487,7 @@ unsafe fn handle_sub(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResu
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn handle_mul(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_mul(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let left = get_op_value(inst, OpSide::OpLeft, vm);
     let right = get_op_value(inst, OpSide::OpRight, vm);
     if left.is_null() || right.is_null() {
@@ -507,7 +507,7 @@ unsafe fn handle_mul(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResu
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn handle_div(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_div(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let left = get_op_value(inst, OpSide::OpLeft, vm);
     let right = get_op_value(inst, OpSide::OpRight, vm);
     if left.is_null() || right.is_null() {
@@ -532,7 +532,7 @@ unsafe fn handle_div(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResu
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn handle_mod(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_mod(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let left = get_op_value(inst, OpSide::OpLeft, vm);
     let right = get_op_value(inst, OpSide::OpRight, vm);
     if left.is_null() || right.is_null() {
@@ -550,7 +550,7 @@ unsafe fn handle_mod(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResu
 
 /// HandlePushScene per BoyiaCore.cpp: set mLValSize, mPC, mContext, mResultNum, mLoopSize on mExecStack[mFrameIndex]; mClass is set by HandlePushObj only.
 /// When inst is null (HandlePushScene(kBoyiaNull, vm)), mLValSize=0 and mPC=null.
-pub(crate) unsafe fn handle_push_scene(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+pub(crate) unsafe fn handle_push_scene(inst: Option<&Instruction>, vm: &mut BoyiaVM) -> OpHandleResult {
     let e_state = (*vm).mEState;
     if e_state.is_null() {
         return OpHandleResult::kOpResultEnd;
@@ -564,15 +564,15 @@ pub(crate) unsafe fn handle_push_scene(inst: *const Instruction, vm: *mut BoyiaV
         return OpHandleResult::kOpResultEnd;
     }
     let frame = exec_stack.add(frame_index);
-    (*frame).mLValSize = if inst.is_null() {
+    (*frame).mLValSize = if inst.is_none() {
         0
     } else {
         (*e_state).mStackFrame.mLValSize - (*vm).mCpu.mReg1.mValue.mIntVal as LInt
     };
-    (*frame).mPC = if inst.is_null() {
+    (*frame).mPC = if inst.is_none() {
         kInvalidInstruction
     } else {
-        (*e_state).mStackFrame.mPC + (*inst).mOPLeft.int_value()
+        (*e_state).mStackFrame.mPC + inst.unwrap().mOPLeft.int_value()
     };
     (*frame).mContext = (*e_state).mStackFrame.mContext;
     (*frame).mResultNum = (*e_state).mStackFrame.mResultNum;
@@ -584,12 +584,12 @@ pub(crate) unsafe fn handle_push_scene(inst: *const Instruction, vm: *mut BoyiaV
 /// HandlePopScene per BoyiaCore.cpp: if mFrameIndex > 0, when `inst` is null (ExecPopFunction path) and
 /// callee slot 0 is `BY_ANONYM_FUNC`, clear ptr and `delete_data` the PushArg-cloned `BoyiaFunction` + `mParams`;
 /// then --mFrameIndex and restore mLValSize, mPC, mContext, mLoopSize, AssignStateClass.
-unsafe fn handle_pop_scene(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_pop_scene(inst: Option<&Instruction>, vm: &mut BoyiaVM) -> OpHandleResult {
     let e_state = (*vm).mEState;
     if e_state.is_null() || (*e_state).mFrameIndex <= 0 {
         return OpHandleResult::kOpResultEnd;
     }
-    if inst.is_null() {
+    if inst.is_none() {
         let callee = get_local_value(0, &mut *vm) as *mut BoyiaValue;
         if !callee.is_null()
             && (*callee).mValueType == ValueType::BY_ANONYM_FUNC
@@ -663,7 +663,7 @@ unsafe fn capture_current_frame_locals_into_function(
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn handle_push_arg(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_push_arg(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let value = get_op_value(inst, OpSide::OpLeft, vm);
     if value.is_null() {
         return OpHandleResult::kOpResultEnd;
@@ -711,7 +711,7 @@ pub(crate) unsafe fn assign_state_class(state: *mut ExecState, value: *const Boy
 }
 
 /// HandlePushObj per BoyiaCore.cpp: mExecStack[mFrameIndex].mClass = mStackFrame.mClass; then if OP_VAR and not kBoyiaSuper, AssignStateClass(Reg0) else AssignStateClass(null).
-unsafe fn handle_push_obj(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_push_obj(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let e_state = (*vm).mEState;
     if e_state.is_null() || (*vm).mExecStack.is_null() {
         return OpHandleResult::kOpResultEnd;
@@ -731,7 +731,7 @@ unsafe fn handle_push_obj(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandl
 
 /// HandleAssignment(Instruction* inst, BoyiaVM* vm) per BoyiaCore.cpp.
 /// Assign right operand to left; no copy to Reg0 at end (C++ does not).
-unsafe fn handle_assignment(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_assignment(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let left = get_op_value(inst, OpSide::OpLeft, vm);
     if left.is_null() {
         return OpHandleResult::kOpResultEnd;
@@ -785,7 +785,7 @@ unsafe fn handle_assignment(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHan
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn handle_jump_to_if_true(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_jump_to_if_true(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let value = get_op_value(inst, OpSide::OpLeft, vm);
     if value.is_null() {
         return OpHandleResult::kOpResultEnd;
@@ -796,7 +796,7 @@ unsafe fn handle_jump_to_if_true(inst: *const Instruction, vm: *mut BoyiaVM) -> 
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn handle_once_jmp_true(inst: *mut Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_once_jmp_true(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     if (*inst).mOPLeft.mType != OpType::OP_CONST_NUMBER {
         return OpHandleResult::kOpResultEnd;
     }
@@ -810,8 +810,8 @@ unsafe fn handle_once_jmp_true(inst: *mut Instruction, vm: *mut BoyiaVM) -> OpHa
 
 /// HandleIfEnd(Instruction* inst, BoyiaVM* vm) per BoyiaCore.cpp: skip trailing elif/else chain via mOPRight offsets.
 /// Uses `mStackFrame.mPC` (current instruction = this IfEnd), not `inst` fields.
-unsafe fn handle_if_end(_inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
-    if vm.is_null() || (*vm).mEState.is_null() {
+unsafe fn handle_if_end(_inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
+    if vm.mEState.is_null() {
         return OpHandleResult::kOpResultEnd;
     }
     let e_state = (*vm).mEState;
@@ -835,7 +835,7 @@ unsafe fn handle_if_end(_inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandle
 
 /// HandleJumpTo per BoyiaCore.cpp: if (inst->mOPLeft.mType == OP_CONST_NUMBER)
 /// mPC = inst - inst->mOPLeft.mValue; return kOpResultSuccess.
-unsafe fn handle_jump_to(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_jump_to(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     if (*inst).mOPLeft.mType == OpType::OP_CONST_NUMBER {
         (*(*vm).mEState).mStackFrame.mPC -= (*inst).mOPLeft.int_value();
     }
@@ -844,7 +844,7 @@ unsafe fn handle_jump_to(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandle
 
 /// HandleLoopBegin per BoyiaCore.cpp: push left => loop stack;
 /// mLoopStack[mLoopSize++] = (LIntPtr)(inst + inst->mOPLeft.mValue).
-unsafe fn handle_loop_begin(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_loop_begin(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let e_state = (*vm).mEState;
     let loop_size = (*e_state).mStackFrame.mLoopSize as usize;
     let target = (*e_state).mStackFrame.mPC + (*inst).mOPLeft.int_value();
@@ -855,7 +855,7 @@ unsafe fn handle_loop_begin(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHan
 
 /// HandleLoopIfTrue per BoyiaCore.cpp: value = &mCpu->mReg0; if !value->mValue.mIntVal then
 /// PC = inst + mOPRight.mValue, mLoopSize--, return; if (inst->mOPLeft.mValue) PC = inst + mOPLeft.mValue; return.
-unsafe fn handle_loop_if_true(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_loop_if_true(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let value = &(*vm).mCpu.mReg0;
     if value.mValue.mIntVal == 0 {
         (*(*vm).mEState).mStackFrame.mPC += (*inst).mOPRight.int_value();
@@ -868,7 +868,7 @@ unsafe fn handle_loop_if_true(inst: *const Instruction, vm: *mut BoyiaVM) -> OpH
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn handle_return(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_return(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let _ = inst;
     let e_state = (*vm).mEState;
     if e_state.is_null() {
@@ -884,7 +884,7 @@ unsafe fn handle_return(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleR
 }
 
 /// HandleBreak per BoyiaCore.cpp: mPC = (Instruction*)mLoopStack[--mStackFrame.mLoopSize]; return kOpResultSuccess.
-unsafe fn handle_break(_inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_break(_inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let e_state = (*vm).mEState;
     (*e_state).mStackFrame.mLoopSize -= 1;
     let idx = (*e_state).mStackFrame.mLoopSize as usize;
@@ -892,7 +892,7 @@ unsafe fn handle_break(_inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleR
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn handle_call_native(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_call_native(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let idx = (*inst).mOPLeft.int_value() as LInt;
     let r = crate::core::native_call_by_index(&mut *vm, idx);
     op_handle_result_from_i32(r)
@@ -969,7 +969,7 @@ unsafe fn find_obj_prop(
     ptr::null_mut()
 }
 
-unsafe fn handle_relational(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_relational(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let left = get_op_value(inst, OpSide::OpLeft, vm);
     let right = get_op_value(inst, OpSide::OpRight, vm);
     if left.is_null() || right.is_null() {
@@ -995,7 +995,7 @@ unsafe fn handle_relational(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHan
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn handle_logic(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_logic(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let left = get_op_value(inst, OpSide::OpLeft, vm);
     let right = get_op_value(inst, OpSide::OpRight, vm);
     if left.is_null() || right.is_null() {
@@ -1016,7 +1016,7 @@ unsafe fn handle_logic(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleRe
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn handle_push_params(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_push_params(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let _ = inst;
     let e_state = (*vm).mEState;
     if e_state.is_null() || (*e_state).mFrameIndex <= 0 {
@@ -1075,7 +1075,7 @@ unsafe fn handle_call_async_function(vm: *mut BoyiaVM) {
     println!("call handle_call_async_function2");
     (*state).mLast = current;
     switch_exec_state(state, vm);
-    let _ = handle_push_scene(ptr::null(), vm);
+    let _ = handle_push_scene(None, &mut *vm);
     let func = (*value).mValue.mObj.mPtr as *const BoyiaFunction;
     let param_size = (*func).mParamSize as usize;
 
@@ -1104,7 +1104,7 @@ unsafe fn handle_call_async_function(vm: *mut BoyiaVM) {
 }
 
 /// HandleCallFunction per BoyiaCore.cpp: localstack first value is function ptr; BY_NAV_FUNC/BY_NAV_PROP => LocalPush + navFun, return; BY_PROP_FUNC/BY_ANONYM_FUNC => AssignStateClass; BY_ASYNC_PROP => HandleCallAsyncFunction; BY_ASYNC => no-op; then set cmds/PC and return kOpResultJumpFun.
-unsafe fn handle_call_function(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_call_function(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     println!("call handle_call_function0");
     let _ = inst;
     let e_state = (*vm).mEState;
@@ -1170,7 +1170,7 @@ unsafe fn handle_call_function(inst: *const Instruction, vm: *mut BoyiaVM) -> Op
 }
 
 /// HandleGetProp: strictly matches BoyiaCore.cpp. GetOpValue(Left); GetInlineCache(inst->mCache, lVal); FindObjProp; ValueCopyWithKey.
-unsafe fn handle_get_prop(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_get_prop(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let lval = get_op_value(inst, OpSide::OpLeft, vm);
     if lval.is_null() {
         return OpHandleResult::kOpResultEnd;
@@ -1198,7 +1198,7 @@ unsafe fn handle_get_prop(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandl
 /// HandleAssignVar(Instruction* inst, BoyiaVM* vm) per BoyiaCore.cpp.
 /// Resolve destination: if left->mValueType == BY_VAR then FindVal(left->mNameKey), else value = (BoyiaValue*)left->mNameKey.
 /// ValueCopyNoName(value, result); ValueCopy(Reg0, value); return kOpResultSuccess.
-unsafe fn handle_assign_var(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_assign_var(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let left = get_op_value(inst, OpSide::OpLeft, vm);
     let result = get_op_value(inst, OpSide::OpRight, vm);
     if left.is_null() || result.is_null() {
@@ -1223,7 +1223,7 @@ unsafe fn handle_assign_var(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHan
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn handle_create_class(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_create_class(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     if (*inst).mOPLeft.mType == OpType::OP_NONE {
         assign_state_class((*vm).mEState, ptr::null());
         return OpHandleResult::kOpResultSuccess;
@@ -1239,7 +1239,7 @@ unsafe fn handle_create_class(inst: *const Instruction, vm: *mut BoyiaVM) -> OpH
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn handle_extend(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_extend(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let class_val = find_global((*inst).mOPLeft.int_value() as LUintPtr, vm);
     let extend_val = find_global((*inst).mOPRight.int_value() as LUintPtr, vm);
     if class_val.is_null() || extend_val.is_null() {
@@ -1251,7 +1251,7 @@ unsafe fn handle_extend(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleR
 
 /// HandleFunCreate per BoyiaCore.cpp (strict 1:1).
 /// Branch order: (1) in class and funType != BY_ANONYM_FUNC -> add method; (2) in class and BY_ANONYM_FUNC -> hashKey != 0: SetIntResult(hashKey); else InitFunction + if hashKey==0 patch inst and SetIntResult(mFunSize-1); (3) else CreateFunVal(hashKey, BY_FUNC).
-unsafe fn handle_fun_create(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_fun_create(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let hash_key = (*inst).mOPLeft.int_value() as LUintPtr;
     let fun_type = (*inst).mOPRight.int_value() as u8;
     let e_state = (*vm).mEState;
@@ -1312,7 +1312,7 @@ unsafe fn handle_fun_create(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHan
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn handle_create_executor(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_create_executor(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let layout = Layout::new::<CommandTable>();
     let new_table = alloc(layout) as *mut CommandTable;
     if new_table.is_null() {
@@ -1332,7 +1332,7 @@ unsafe fn handle_create_executor(inst: *const Instruction, vm: *mut BoyiaVM) -> 
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn handle_create_param(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_create_param(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let hash_key = (*inst).mOPLeft.int_value() as LUintPtr;
     if (*vm).mFunSize <= 0 {
         return OpHandleResult::kOpResultEnd;
@@ -1348,7 +1348,7 @@ unsafe fn handle_create_param(inst: *const Instruction, vm: *mut BoyiaVM) -> OpH
 }
 
 /// Add property slot to current class (mStackFrame.mClass). Match HandleCreateProp in BoyiaCore.cpp.
-unsafe fn handle_create_prop(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_create_prop(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let func = (*(*vm).mEState).mStackFrame.mClass.mValue.mObj.mPtr as *mut BoyiaFunction;
     let param = (*func).mParams.add((*func).mParamSize as usize);
     (*param).mNameKey = (*inst).mOPLeft.int_value() as LUintPtr;
@@ -1358,7 +1358,7 @@ unsafe fn handle_create_prop(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHa
 }
 
 /// HandleCreateMap per BoyiaCore.cpp: CreatMapObject(vm); value = mOPLeft ? mReg0 : mReg1; set BY_CLASS, mPtr, mSuper = K_BOYIA_NULL.
-unsafe fn handle_create_map(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_create_map(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     // CreatMapObject(vm) = CopyObject(kBoyiaMap, 32, vm) per BoyiaValue.cpp
     let fun = copy_object(BuiltinId::kBoyiaMap.as_key(), 32, &mut *vm) as *mut BoyiaFunction;
     if fun.is_null() {
@@ -1376,7 +1376,7 @@ unsafe fn handle_create_map(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHan
 }
 
 /// HandleSetMapKey per BoyiaCore.cpp: value = mOPLeft ? mReg0 : mReg1; function = value->mObj.mPtr; param = &function->mParams[function->mParamSize++]; param->mNameKey = mOPRight.mValue.
-unsafe fn handle_set_map_key(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_set_map_key(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let value = if (*inst).mOPLeft.mType == OpType::OP_REG0 {
         &(*vm).mCpu.mReg0
     } else {
@@ -1390,7 +1390,7 @@ unsafe fn handle_set_map_key(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHa
 }
 
 /// HandleSetMapValue per BoyiaCore.cpp: obj = mOPRight ? mReg0 : mReg1; value = mOPLeft ? mReg0 : mReg1; param = function->mParams[mParamSize-1]; ValueCopyNoName(param, value); SetNativeResult(obj, vm).
-unsafe fn handle_set_map_value(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_set_map_value(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let obj = if (*inst).mOPRight.mType == OpType::OP_REG0 {
         &(*vm).mCpu.mReg0
     } else {
@@ -1409,7 +1409,7 @@ unsafe fn handle_set_map_value(inst: *const Instruction, vm: *mut BoyiaVM) -> Op
 }
 
 /// HandleCreateArray per BoyiaCore.cpp: CreateArrayObject(vm); value = mOPLeft ? mReg0 : mReg1; set BY_CLASS, mPtr, mSuper = K_BOYIA_NULL.
-unsafe fn handle_create_array(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_create_array(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     // CreateArrayObject(vm) = CopyObject(kBoyiaArray, 32, vm) per BoyiaValue.cpp
     let fun = copy_object(BuiltinId::kBoyiaArray.as_key(), 32, &mut *vm) as *mut BoyiaFunction;
     if fun.is_null() {
@@ -1426,7 +1426,7 @@ unsafe fn handle_create_array(inst: *const Instruction, vm: *mut BoyiaVM) -> OpH
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn handle_add_array_item(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_add_array_item(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let obj = if (*inst).mOPRight.mType == OpType::OP_REG0 {
         &(*vm).mCpu.mReg0
     } else {
@@ -1450,7 +1450,7 @@ unsafe fn handle_add_array_item(inst: *const Instruction, vm: *mut BoyiaVM) -> O
 
 /// HandleConstString(Instruction* inst, BoyiaVM* vm) per BoyiaCore.cpp.
 /// str = &mStrTable->mTable[inst->mOPLeft.mValue]; CreateConstString(&mReg0, str->mPtr, str->mLen, vm).
-unsafe fn handle_const_str(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_const_str(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let str_table = &(*vm).mStrTable;
     let str_idx = (*inst).mOPLeft.int_value() as usize;
     let Some(s) = str_table.get(str_idx) else {
@@ -1464,7 +1464,7 @@ unsafe fn handle_const_str(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHand
     }
 }
 
-unsafe fn handle_await(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_await(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let left = get_op_value(inst, OpSide::OpLeft, vm);
     if left.is_null() {
         return handle_return(inst, vm);
@@ -1522,7 +1522,7 @@ unsafe fn handle_await(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleRe
     OpHandleResult::kOpResultEnd
 }
 
-unsafe fn handle_set_anonym(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_set_anonym(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
     let left = get_op_value(inst, OpSide::OpLeft, vm);
     if left.is_null() || (*vm).mFunTable.is_null() {
         return OpHandleResult::kOpResultEnd;
@@ -1548,7 +1548,7 @@ unsafe fn handle_set_anonym(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHan
 }
 
 /// No-op; kCmdEnd is the enum end sentinel in C++, not dispatched.
-unsafe fn handle_cmd_end(_inst: *const Instruction, _vm: *mut BoyiaVM) -> OpHandleResult {
+unsafe fn handle_cmd_end(_inst: &mut Instruction, _vm: &mut BoyiaVM) -> OpHandleResult {
     OpHandleResult::kOpResultSuccess
 }
 
@@ -1569,8 +1569,11 @@ pub(crate) unsafe fn exec_instruction(vm: *mut BoyiaVM) {
     eprintln!("[exec_instruction] dispatching first inst");
     while pc_is_valid((*e_state).mStackFrame.mPC) {
         let pc = (*e_state).mStackFrame.mPC;
-        let inst = instruction_ptr_at(vm, pc);
-        let result = dispatch_instruction(inst, vm);
+        let inst_ptr = instruction_ptr_at(vm, pc);
+        if inst_ptr.is_null() {
+            break;
+        }
+        let result = dispatch_instruction(&mut *inst_ptr, &mut *vm);
         e_state = (*vm).mEState;
         if result == OpHandleResult::kOpResultEnd {
             break;

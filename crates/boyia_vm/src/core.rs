@@ -406,9 +406,8 @@ enum InitVmStage {
     FunTableOk,
     CpuOk,
     ExecStateCacheOk,
-    /// `create_exec_state` + `switch_exec_state` done; handlers not allocated yet.
+    /// `create_exec_state` + `switch_exec_state` done.
     ExecStateActive,
-    HandlersOk,
     /// `MicroTaskQueue` struct allocated (`mTaskCache` may be null if cache create failed).
     TaskQueueShell,
 }
@@ -423,7 +422,6 @@ unsafe fn init_vm_abort(vm_ptr: *mut BoyiaVM, completed: InitVmStage) -> *mut LV
     let fun_table_layout = Layout::array::<BoyiaFunction>(NUM_FUNC).unwrap();
     let vm_layout = Layout::new::<BoyiaVM>();
     let task_queue_layout = Layout::new::<MicroTaskQueue>();
-    let handlers_layout = Layout::array::<OPHandler>(65).unwrap();
 
     if completed >= InitVmStage::TaskQueueShell && !vm.mTaskQueue.is_null() {
         let q = vm.mTaskQueue;
@@ -433,10 +431,6 @@ unsafe fn init_vm_abort(vm_ptr: *mut BoyiaVM, completed: InitVmStage) -> *mut LV
         }
         dealloc(q as *mut u8, task_queue_layout);
         vm.mTaskQueue = ptr::null_mut();
-    }
-    if completed >= InitVmStage::HandlersOk && !vm.mHandlers.is_null() {
-        dealloc(vm.mHandlers as *mut u8, handlers_layout);
-        vm.mHandlers = ptr::null_mut();
     }
     if completed >= InitVmStage::ExecStateCacheOk && !vm.mEStateCache.is_null() {
         destroy_memory_cache(vm.mEStateCache);
@@ -529,17 +523,11 @@ pub unsafe fn init_vm_boxed(creator: *mut dyn Runtime) -> Option<Box<BoyiaVM>> {
     }
     switch_exec_state(vm.mEState, vm_ptr);
 
-    eprintln!("[init_vm] 9 alloc Handlers");
-    let handlers_layout = Layout::array::<OPHandler>(65).unwrap();
-    vm.mHandlers = alloc_zeroed(handlers_layout) as *mut OPHandler;
-    if vm.mHandlers.is_null() {
-        init_vm_abort(vm_ptr, InitVmStage::ExecStateActive);
-        return None;
-    }
+    eprintln!("[init_vm] 9 alloc TaskQueue");
     let task_queue_layout = Layout::new::<MicroTaskQueue>();
     vm.mTaskQueue = alloc_zeroed(task_queue_layout) as *mut MicroTaskQueue;
     if vm.mTaskQueue.is_null() {
-        init_vm_abort(vm_ptr, InitVmStage::HandlersOk);
+        init_vm_abort(vm_ptr, InitVmStage::ExecStateActive);
         return None;
     }
     (*vm.mTaskQueue).mUsedTasks.mHead = ptr::null_mut();
@@ -570,11 +558,6 @@ unsafe fn drop_vm_owned_resources(vm: &mut BoyiaVM) {
     if !vm.mEStateCache.is_null() {
         destroy_memory_cache(vm.mEStateCache);
         vm.mEStateCache = ptr::null_mut();
-    }
-    if !vm.mHandlers.is_null() {
-        let layout = Layout::array::<OPHandler>(65).unwrap();
-        dealloc(vm.mHandlers as *mut u8, layout);
-        vm.mHandlers = ptr::null_mut();
     }
     if !vm.mTaskQueue.is_null() {
         let q = vm.mTaskQueue;
@@ -926,7 +909,7 @@ pub unsafe fn native_call_impl(
         return OpHandleResult::kOpResultEnd;
     }
     switch_exec_state(state, vm as *mut BoyiaVM);
-    let _ = crate::execute::handle_push_scene(ptr::null(), vm as *mut BoyiaVM);
+    let _ = crate::execute::handle_push_scene(None, vm);
     let start = (*state).mExecStack.as_ptr().add((*state).mFrameIndex as usize - 1).read().mLValSize;
     for idx in 0..argc {
         value_copy(
