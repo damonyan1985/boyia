@@ -363,12 +363,12 @@ pub unsafe fn vector_params_grow_if_full(fun: *mut BoyiaFunction, vm: &mut Boyia
 /// copy `mParamCount` / `mFuncBody` / `mParamSize`, `mCaptureCount = 0`, `ValueCopy` formal slots `[0..mParamSize)`.
 pub(crate) unsafe fn clone_anonym_boyia_function_for_push_arg(
     src: *mut BoyiaFunction,
-    vm: *mut BoyiaVM,
+    vm: &mut BoyiaVM,
 ) -> *mut BoyiaFunction {
-    if src.is_null() || vm.is_null() {
+    if src.is_null() {
         return ptr::null_mut();
     }
-    let creator = (*vm).mCreator;
+    let creator = vm.mCreator;
     if creator.is_null() {
         return ptr::null_mut();
     }

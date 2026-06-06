@@ -620,10 +620,10 @@ unsafe fn handle_pop_scene(inst: Option<&Instruction>, vm: &mut BoyiaVM) -> OpHa
 /// Append copies of current-frame locals `mLocals[start+1 .. mLValSize)` into `fun`'s capture tail
 /// (`mParams[mParamSize + mCaptureCount]`), incrementing `mCaptureCount` only. Slot `start` is the callee pointer.
 unsafe fn capture_current_frame_locals_into_function(
-    vm: *mut BoyiaVM,
+    vm: &mut BoyiaVM,
     fun: *mut BoyiaFunction,
 ) -> OpHandleResult {
-    if vm.is_null() || (*vm).mEState.is_null() {
+    if vm.mEState.is_null() {
         return OpHandleResult::kOpResultEnd;
     }
     if fun.is_null() {
@@ -632,12 +632,12 @@ unsafe fn capture_current_frame_locals_into_function(
     if (*fun).mParams.is_null() {
         return OpHandleResult::kOpResultEnd;
     }
-    let e_state = (*vm).mEState;
-    if (*e_state).mFrameIndex <= 0 || (*vm).mExecStack.is_null() || (*vm).mLocals.is_null() {
+    let e_state = vm.mEState;
+    if (*e_state).mFrameIndex <= 0 || vm.mExecStack.is_null() || vm.mLocals.is_null() {
         return OpHandleResult::kOpResultSuccess;
     }
     let frame_idx = (*e_state).mFrameIndex as usize - 1;
-    let start = (*vm).mExecStack.add(frame_idx).read().mLValSize;
+    let start = vm.mExecStack.add(frame_idx).read().mLValSize;
     if start < 0 || start as usize >= NUM_LOCAL_VARS {
         return OpHandleResult::kOpResultSuccess;
     }
@@ -648,14 +648,14 @@ unsafe fn capture_current_frame_locals_into_function(
     let mut idx = start + 1;
     while idx < frame_end {
         while (*fun).mParamSize + (*fun).mCaptureCount >= crate::core::get_function_count(fun) {
-            if !vector_params_grow_if_full(fun, &mut *vm) {
+            if !vector_params_grow_if_full(fun, vm) {
                 return OpHandleResult::kOpResultEnd;
             }
         }
         let write_idx = (*fun).mParamSize + (*fun).mCaptureCount;
         value_copy_no_name(
             (*fun).mParams.add(write_idx as usize),
-            (*vm).mLocals.add(idx as usize),
+            vm.mLocals.add(idx as usize),
         );
         (*fun).mCaptureCount += 1;
         idx += 1;
@@ -686,14 +686,14 @@ unsafe fn handle_push_arg(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleR
                 return r;
             }
             (*value).mValue.mObj.mPtr = fun as LIntPtr;
-            let rt = get_runtime_from_vm(&mut *vm);
+            let rt = get_runtime_from_vm(vm);
             if !rt.is_null() {
                 let _ = (*rt).persistent_object(value as *const BoyiaValue);
             }
         }
     }
     eprintln!("[handle_push_arg] value.mNameKey={}", (*value).mNameKey);
-    local_push(value, &mut *vm);
+    local_push(value, vm);
     OpHandleResult::kOpResultSuccess
 }
 
