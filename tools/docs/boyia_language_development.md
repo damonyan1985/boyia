@@ -74,7 +74,7 @@ class Calc {
 };
 ```
 
-### 3.4 异步属性方法（prop async fun）
+### 3.4 异步属性方法（prop async）
 
 ```boyia
 class Service {
