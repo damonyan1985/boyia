@@ -745,16 +745,16 @@ pub(crate) unsafe fn create_fun_val(hash_key: LUintPtr, type_: ValueType, vm: *m
 unsafe fn copy_function(
     cls_val: *const BoyiaValue,
     count: LInt,
-    vm: *mut BoyiaVM,
+    vm: &mut BoyiaVM,
 ) -> *mut BoyiaFunction {
-    if cls_val.is_null() || vm.is_null() || count <= 0 {
+    if cls_val.is_null() || count <= 0 {
         return ptr::null_mut();
     }
     let func = (*cls_val).mValue.mObj.mPtr as *mut BoyiaFunction;
     if func.is_null() {
         return ptr::null_mut();
     }
-    let creator = (*vm).mCreator;
+    let creator = vm.mCreator;
     if creator.is_null() {
         return ptr::null_mut();
     }
@@ -829,7 +829,7 @@ pub unsafe fn create_object(vm: &mut BoyiaVM) -> LInt {
     }
     let result = &mut (*(*vm).mCpu).mReg0;
     value_copy(result, value);
-    let new_func = copy_function(value, NUM_FUNC_PARAMS as LInt, vm as *mut BoyiaVM);
+    let new_func = copy_function(value, NUM_FUNC_PARAMS as LInt, vm);
     if new_func.is_null() {
         eprintln!("[create_object] -> kOpResultEnd (copy_function returned null)");
         return OpHandleResult::kOpResultEnd as i32;
@@ -885,7 +885,7 @@ pub unsafe fn copy_object(hash_key: LUintPtr, size: LInt, vm: &mut BoyiaVM) -> *
     if global.is_null() {
         return ptr::null_mut();
     }
-    let obj_body = copy_function(global, size, vm as *mut BoyiaVM);
+    let obj_body = copy_function(global, size, vm);
     if obj_body.is_null() {
         return ptr::null_mut();
     }
