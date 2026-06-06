@@ -89,8 +89,13 @@ impl BoyiaRuntime {
 
         eprintln!("[init] 4 builtin_string_class");
         // Builtin classes: use BuiltinId keys per BoyiaValue.h (CreateGlobalClass(kBoyiaString, vm) etc.)
-        let vm = self.vm_ptr();
-        let mut gen_id = |s: &str| self.id_creator.gen_ident_by_str(s);
+        let BoyiaRuntime {
+            id_creator,
+            vm,
+            ..
+        } = self;
+        let vm = vm.as_deref_mut().expect("vm initialized");
+        let mut gen_id = |s: &str| id_creator.gen_ident_by_str(s);
         builtin_string_class(vm, &mut gen_id);
         eprintln!("[init] 5 builtin_map_class");
         builtin_map_class(vm, &mut gen_id);
@@ -163,7 +168,14 @@ impl BoyiaRuntime {
 
     /// Compile script source into the VM (`BoyiaCompileInfo::compile` / `CompileCode`).
     pub fn compile(&mut self, script: &str) {
-        self.compile_info.compile_string(script, self.vm_ptr());
+        let BoyiaRuntime {
+            compile_info,
+            vm,
+            ..
+        } = self;
+        if let Some(vm) = vm.as_deref_mut() {
+            compile_info.compile_string(script, vm);
+        }
     }
 
     /// Set the entry script path used to resolve relative `require` at runtime (e.g. CLI `main.boyia`).
@@ -173,13 +185,19 @@ impl BoyiaRuntime {
 
     /// C++ `BoyiaRuntime::compileFile` → `m_compileInfo->compileFile(path)`.
     pub fn compile_file(&mut self, path: &str) {
-        self.compile_info
-            .compile_file(path, self.vm_ptr(), &mut self.id_creator);
+        let BoyiaRuntime {
+            compile_info,
+            id_creator,
+            vm,
+            ..
+        } = self;
+        if let Some(vm) = vm.as_deref_mut() {
+            compile_info.compile_file(path, vm, id_creator);
+        }
     }
 
-    /// VM pointer for use with boyia_vm APIs.
-    pub fn vm(&self) -> *mut LVoid {
-        self.vm_ptr()
+    fn vm_mut(&mut self) -> Option<&mut BoyiaVM> {
+        self.vm.as_deref_mut()
     }
 
     fn vm_ptr(&self) -> *mut LVoid {
@@ -189,9 +207,23 @@ impl BoyiaRuntime {
             .unwrap_or(ptr::null_mut())
     }
 
+    /// VM pointer for legacy GC / memory boundaries.
+    pub fn vm(&self) -> *mut LVoid {
+        self.vm_ptr()
+    }
+
     /// Id creator for string keys.
     pub fn id_creator(&mut self) -> &mut IdCreator {
         &mut self.id_creator
+    }
+
+    /// Borrow VM and id creator together (disjoint fields) for embedder builtin registration.
+    pub fn with_vm_and_id_creator<R>(
+        &mut self,
+        f: impl FnOnce(&mut BoyiaVM, &mut IdCreator) -> R,
+    ) -> Option<R> {
+        let BoyiaRuntime { id_creator, vm, .. } = self;
+        vm.as_deref_mut().map(|vm| f(vm, id_creator))
     }
 
     pub fn is_load_exe_file(&self) -> bool {
@@ -199,23 +231,29 @@ impl BoyiaRuntime {
     }
 
     /// Run global code (entry table). Match ExecuteGlobalCode.
-    pub fn run_exe_file(&self) {
-        unsafe {
-            execute_global_code(self.vm_ptr());
+    pub fn run_exe_file(&mut self) {
+        if let Some(vm) = self.vm_mut() {
+            unsafe {
+                execute_global_code(vm);
+            }
         }
     }
 
     /// Cache VM code (patch instructions). Match CacheVMCode.
-    pub fn cache_code(&self) {
-        unsafe {
-            cache_vm_code(self.vm_ptr());
+    pub fn cache_code(&mut self) {
+        if let Some(vm) = self.vm_mut() {
+            unsafe {
+                cache_vm_code(vm);
+            }
         }
     }
 
     /// Consume micro tasks in the queue.
-    pub fn consume_micro_task(&self) {
-        unsafe {
-            consume_micro_task(self.vm_ptr());
+    pub fn consume_micro_task(&mut self) {
+        if let Some(vm) = self.vm_mut() {
+            unsafe {
+                consume_micro_task(vm);
+            }
         }
     }
 }
@@ -264,7 +302,7 @@ impl Runtime for BoyiaRuntime {
         -1
     }
 
-    fn call_native_function(&self, idx: LInt) -> LInt {
+    fn call_native_function(&mut self, vm: &mut BoyiaVM, idx: LInt) -> LInt {
         if idx < 0 || idx as usize >= self.native_fun_table.len() {
             return OpHandleResult::kOpResultEnd as i32;
         }
@@ -272,7 +310,7 @@ impl Runtime for BoyiaRuntime {
         if nf.mAddr as *const () == sentinel_native as *const () {
             return OpHandleResult::kOpResultEnd as i32;
         }
-        unsafe { (nf.mAddr)(self.vm_ptr()) as i32 }
+        unsafe { (nf.mAddr)(vm) as i32 }
     }
 
     fn gen_identifier(&mut self, key: &str) -> LUintPtr {
@@ -352,8 +390,15 @@ impl Runtime for BoyiaRuntime {
     }
 
     fn compile_script_file(&mut self, resolved_path: &str) {
-        self.compile_info
-            .compile_file(resolved_path, self.vm_ptr(), &mut self.id_creator);
+        let BoyiaRuntime {
+            compile_info,
+            id_creator,
+            vm,
+            ..
+        } = self;
+        if let Some(vm) = vm.as_deref_mut() {
+            compile_info.compile_file(resolved_path, vm, id_creator);
+        }
     }
 }
 
@@ -380,6 +425,6 @@ impl Drop for BoyiaRuntime {
 }
 
 /// Sentinel: end of native table (never called with valid idx).
-unsafe fn sentinel_native(_vm: *mut LVoid) -> OpHandleResult {
+unsafe fn sentinel_native(_vm: &mut BoyiaVM) -> OpHandleResult {
     OpHandleResult::kOpResultEnd
 }

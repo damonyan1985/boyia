@@ -11,7 +11,7 @@ mod microtask;
 mod string;
 
 use boyia_vm::{
-    alloc_builtin_function, BoyiaFunction, NativePtr, ValueType, LIntPtr, LUintPtr, LVoid,
+    alloc_builtin_function, BoyiaFunction, NativePtr, ValueType, LIntPtr, LUintPtr, BoyiaVM, LVoid,
 };
 
 // ---------------------------------------------------------------------------
@@ -23,10 +23,10 @@ pub unsafe fn gen_builtin_class_function(
     key: LUintPtr,
     func: NativePtr,
     class_body: *mut BoyiaFunction,
-    vm: *mut LVoid,
+    vm: &mut BoyiaVM,
 ) {
     eprintln!("[gen_builtin_class_function] key={}", key);
-    if class_body.is_null() || vm.is_null() {
+    if class_body.is_null() {
         eprintln!("[gen_builtin_class_function] null class_body or vm");
         return;
     }
@@ -47,9 +47,9 @@ pub unsafe fn gen_builtin_class_prop_function(
     key: LUintPtr,
     func: NativePtr,
     class_body: *mut BoyiaFunction,
-    vm: *mut LVoid,
+    vm: &mut BoyiaVM,
 ) {
-    if class_body.is_null() || vm.is_null() {
+    if class_body.is_null() {
         return;
     }
     let method_fn = alloc_builtin_function(vm, func);

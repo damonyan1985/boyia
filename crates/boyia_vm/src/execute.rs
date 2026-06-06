@@ -107,7 +107,7 @@ unsafe fn get_capture_ptr(vm: *mut BoyiaVM, capture_idx: LIntPtr) -> *mut BoyiaV
     if vm.is_null() {
         return ptr::null_mut();
     }
-    let val = get_local_value(0, vm as *mut LVoid) as *mut BoyiaValue;
+    let val = get_local_value(0, &mut *vm) as *mut BoyiaValue;
     if val.is_null() {
         return ptr::null_mut();
     }
@@ -372,7 +372,7 @@ unsafe fn handle_decl_local(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHan
         mValue: RealValue { mIntVal: 0 },
     };
     local.mNameKey = (*inst).mOPRight.int_value() as LUintPtr;
-    local_push(&mut local, vm as *mut LVoid);
+    local_push(&mut local, &mut *vm);
     OpHandleResult::kOpResultSuccess
 }
 
@@ -590,7 +590,7 @@ unsafe fn handle_pop_scene(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHand
         return OpHandleResult::kOpResultEnd;
     }
     if inst.is_null() {
-        let callee = get_local_value(0, vm as *mut LVoid) as *mut BoyiaValue;
+        let callee = get_local_value(0, &mut *vm) as *mut BoyiaValue;
         if !callee.is_null()
             && (*callee).mValueType == ValueType::BY_ANONYM_FUNC
             && (*callee).mValue.mObj.mPtr != K_BOYIA_NULL
@@ -648,7 +648,7 @@ unsafe fn capture_current_frame_locals_into_function(
     let mut idx = start + 1;
     while idx < frame_end {
         while (*fun).mParamSize + (*fun).mCaptureCount >= crate::core::get_function_count(fun) {
-            if !vector_params_grow_if_full(fun, vm as *mut LVoid) {
+            if !vector_params_grow_if_full(fun, &mut *vm) {
                 return OpHandleResult::kOpResultEnd;
             }
         }
@@ -686,14 +686,14 @@ unsafe fn handle_push_arg(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandl
                 return r;
             }
             (*value).mValue.mObj.mPtr = fun as LIntPtr;
-            let rt = get_runtime_from_vm(vm as *mut LVoid);
+            let rt = get_runtime_from_vm(&mut *vm);
             if !rt.is_null() {
                 let _ = (*rt).persistent_object(value as *const BoyiaValue);
             }
         }
     }
     eprintln!("[handle_push_arg] value.mNameKey={}", (*value).mNameKey);
-    local_push(value, vm as *mut LVoid);
+    local_push(value, &mut *vm);
     OpHandleResult::kOpResultSuccess
 }
 
@@ -894,7 +894,7 @@ unsafe fn handle_break(_inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleR
 
 unsafe fn handle_call_native(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
     let idx = (*inst).mOPLeft.int_value() as LInt;
-    let r = crate::core::native_call_by_index(vm as *mut LVoid, idx);
+    let r = crate::core::native_call_by_index(&mut *vm, idx);
     op_handle_result_from_i32(r)
 }
 
@@ -1129,10 +1129,10 @@ unsafe fn handle_call_function(inst: *const Instruction, vm: *mut BoyiaVM) -> Op
     let value_type = (*value).mValueType;
     // 内置类产生的对象，调用其方法
     if value_type == ValueType::BY_NAV_FUNC || value_type == ValueType::BY_NAV_PROP {
-        local_push(&mut (*e_state).mStackFrame.mClass, vm as *mut LVoid);
+        local_push(&mut (*e_state).mStackFrame.mClass, &mut *vm);
         let nav_fun = std::mem::transmute::<_, crate::types::NativePtr>((*func).mFuncBody);
         (*e_state).mStackFrame.mPC = kInvalidInstruction;
-        return nav_fun(vm as *mut LVoid);
+        return nav_fun(&mut *vm);
     }
 
     println!("call handle_call_function4");
@@ -1293,7 +1293,7 @@ unsafe fn handle_fun_create(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHan
 
         // funType == BY_ANONYM_FUNC (C++ lines 1729–1741).
         if hash_key != 0 {
-            let _ = set_int_result(hash_key as LInt, vm as *mut LVoid);
+            let _ = set_int_result(hash_key as LInt, &mut *vm);
             return OpHandleResult::kOpResultSuccess;
         }
         init_function((*vm).mFunTable.add((*vm).mFunSize as usize), vm);
@@ -1301,7 +1301,7 @@ unsafe fn handle_fun_create(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHan
             let inst_mut = inst as *mut Instruction;
             (*inst_mut).mOPLeft.mType = OpType::OP_CONST_NUMBER;
             (*inst_mut).mOPLeft.set_int_value(((*vm).mFunSize - 1) as LIntPtr);
-            let _ = set_int_result((*vm).mFunSize - 1, vm as *mut LVoid);
+            let _ = set_int_result((*vm).mFunSize - 1, &mut *vm);
             return OpHandleResult::kOpResultSuccess;
         }
     } else {
@@ -1360,7 +1360,7 @@ unsafe fn handle_create_prop(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHa
 /// HandleCreateMap per BoyiaCore.cpp: CreatMapObject(vm); value = mOPLeft ? mReg0 : mReg1; set BY_CLASS, mPtr, mSuper = K_BOYIA_NULL.
 unsafe fn handle_create_map(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
     // CreatMapObject(vm) = CopyObject(kBoyiaMap, 32, vm) per BoyiaValue.cpp
-    let fun = copy_object(BuiltinId::kBoyiaMap.as_key(), 32, vm as *mut LVoid) as *mut BoyiaFunction;
+    let fun = copy_object(BuiltinId::kBoyiaMap.as_key(), 32, &mut *vm) as *mut BoyiaFunction;
     if fun.is_null() {
         return OpHandleResult::kOpResultEnd;
     }
@@ -1404,14 +1404,14 @@ unsafe fn handle_set_map_value(inst: *const Instruction, vm: *mut BoyiaVM) -> Op
     let function = (*obj).mValue.mObj.mPtr as *mut BoyiaFunction;
     let param = (*function).mParams.add((*function).mParamSize as usize - 1);
     value_copy_no_name(param, value);
-    set_native_result(obj as *const BoyiaValue as *mut BoyiaValue, vm as *mut LVoid);
+    set_native_result(obj as *const BoyiaValue as *mut BoyiaValue, &mut *vm);
     OpHandleResult::kOpResultSuccess
 }
 
 /// HandleCreateArray per BoyiaCore.cpp: CreateArrayObject(vm); value = mOPLeft ? mReg0 : mReg1; set BY_CLASS, mPtr, mSuper = K_BOYIA_NULL.
 unsafe fn handle_create_array(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
     // CreateArrayObject(vm) = CopyObject(kBoyiaArray, 32, vm) per BoyiaValue.cpp
-    let fun = copy_object(BuiltinId::kBoyiaArray.as_key(), 32, vm as *mut LVoid) as *mut BoyiaFunction;
+    let fun = copy_object(BuiltinId::kBoyiaArray.as_key(), 32, &mut *vm) as *mut BoyiaFunction;
     if fun.is_null() {
         return OpHandleResult::kOpResultEnd;
     }
@@ -1444,7 +1444,7 @@ unsafe fn handle_add_array_item(inst: *const Instruction, vm: *mut BoyiaVM) -> O
     let idx = (*function).mParamSize as usize;
     value_copy((*function).mParams.add(idx), value);
     (*function).mParamSize += 1;
-    set_native_result(obj as *const BoyiaValue as *mut BoyiaValue, vm as *mut LVoid);
+    set_native_result(obj as *const BoyiaValue as *mut BoyiaValue, &mut *vm);
     OpHandleResult::kOpResultSuccess
 }
 
@@ -1457,7 +1457,7 @@ unsafe fn handle_const_str(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHand
         return OpHandleResult::kOpResultEnd;
     };
     let reg0 = &mut (*(*vm).mCpu).mReg0 as *mut BoyiaValue;
-    if create_const_string(reg0, s.mPtr, s.mLen, vm as *mut LVoid) {
+    if create_const_string(reg0, s.mPtr, s.mLen, &mut *vm) {
         OpHandleResult::kOpResultSuccess
     } else {
         OpHandleResult::kOpResultEnd
@@ -1474,7 +1474,7 @@ unsafe fn handle_await(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleRe
         return OpHandleResult::kOpResultEnd;
     }
     let class_id = get_boyia_class_id(left);
-    if class_id != micro_task_class_key(vm as *mut LVoid) {
+    if class_id != micro_task_class_key(&mut *vm) {
         return handle_return(inst, vm);
     }
     (*e_state).mWait = LTrue;
@@ -1490,7 +1490,7 @@ unsafe fn handle_await(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleRe
         if !top_task.is_null() {
             (*e_state).mTopTask = top_task;
             (*top_task).mAsyncEs = ptr::null_mut();
-            let task_obj = create_micro_task_object(vm as *mut LVoid);
+            let task_obj = create_micro_task_object(&mut *vm);
             if !task_obj.is_null() {
                 (*task_obj).mParams.add(1).write(BoyiaValue {
                     mNameKey: 0,
@@ -1509,7 +1509,7 @@ unsafe fn handle_await(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleRe
                         },
                     },
                 };
-                set_native_result(&mut result, vm as *mut LVoid);
+                set_native_result(&mut result, &mut *vm);
             }
         }
     }
@@ -1543,7 +1543,7 @@ unsafe fn handle_set_anonym(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHan
             },
         },
     };
-    set_native_result(&mut result, vm as *mut LVoid);
+    set_native_result(&mut result, &mut *vm);
     OpHandleResult::kOpResultSuccess
 }
 
@@ -1589,38 +1589,32 @@ pub(crate) unsafe fn exec_instruction(vm: *mut BoyiaVM) {
 }
 
 /// Execute global code: for each entry, set mContext and run execute_code. Match ExecuteGlobalCode in BoyiaCore.cpp.
-pub unsafe fn execute_global_code(vm: *mut LVoid) {
+pub unsafe fn execute_global_code(vm: &mut BoyiaVM) {
     eprintln!("[execute_global_code] enter");
-    if vm.is_null() {
-        return;
-    }
-    let vm = vm as *mut BoyiaVM;
-    if (*vm).mEState.is_null() || (*vm).mEntry.is_empty() || (*vm).mVMCode.is_empty() {
+    if vm.mEState.is_null() || vm.mEntry.is_empty() || vm.mVMCode.is_empty() {
         eprintln!("[execute_global_code] early return null");
         return;
     }
-    reset_scene((*vm).mEState);
-    let entry = &(*vm).mEntry;
-    let size = entry.len();
+    reset_scene(vm.mEState);
+    let size = vm.mEntry.len();
     eprintln!("[execute_global_code] entry size={}", size);
     let mut cmds = crate::types::CommandTable::new();
     for i in 0..size {
-        let entry_offset = entry.get(i).unwrap_or(0);
+        let entry_offset = vm.mEntry.get(i).unwrap_or(0);
         cmds.mBegin = entry_offset as LIntPtr;
         cmds.mEnd = kInvalidInstruction;
-        (*(*vm).mEState).mStackFrame.mContext = &mut cmds;
-        execute_code(vm as *mut LVoid);
+        (*vm.mEState).mStackFrame.mContext = &mut cmds;
+        execute_code(vm);
     }
 }
 
 /// Execute code for current mStackFrame.mContext (set by caller). Resets scene after.
-pub unsafe fn execute_code(vm: *mut LVoid) {
-    let vm = vm as *mut BoyiaVM;
+pub unsafe fn execute_code(vm: &mut BoyiaVM) {
     eprintln!("[execute_code] enter");
-    if vm.is_null() || (*vm).mEState.is_null() {
+    if vm.mEState.is_null() {
         return;
     }
-    let e_state = (*vm).mEState;
+    let e_state = vm.mEState;
     let ctx = (*e_state).mStackFrame.mContext;
     eprintln!("[execute_code] ctx={:?}", ctx);
     if ctx.is_null() {
@@ -1630,6 +1624,6 @@ pub unsafe fn execute_code(vm: *mut LVoid) {
     eprintln!("[execute_code] mBegin={:?}", begin);
     (*e_state).mStackFrame.mPC = begin;
     eprintln!("[execute_code] calling exec_instruction");
-    exec_instruction(vm);
-    reset_scene((*vm).mEState);
+    exec_instruction(vm as *mut BoyiaVM);
+    reset_scene(vm.mEState);
 }

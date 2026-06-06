@@ -84,50 +84,37 @@ pub(crate) unsafe fn value_copy_with_key(dest: *mut BoyiaValue, src: *const Boyi
 // ---------------------------------------------------------------------------
 
 /// Set native result to reg0.
-pub unsafe fn set_native_result(result: *mut BoyiaValue, vm: *mut LVoid) {
-    if result.is_null() || vm.is_null() {
+pub unsafe fn set_native_result(result: *mut BoyiaValue, vm: &mut BoyiaVM) {
+    if result.is_null() {
         return;
     }
-    let vm_ptr = vm as *mut BoyiaVM;
-    if !(*vm_ptr).mCpu.is_null() {
-        value_copy(&mut (*(*vm_ptr).mCpu).mReg0, result);
+    if !(*vm).mCpu.is_null() {
+        value_copy(&mut (*(*vm).mCpu).mReg0, result);
     }
 }
 
 /// Get native result (reg0).
-pub unsafe fn get_native_result(vm: *mut LVoid) -> *mut BoyiaValue {
-    if vm.is_null() {
+pub unsafe fn get_native_result(vm: &mut BoyiaVM) -> *mut BoyiaValue {
+    if (*vm).mCpu.is_null() {
         return ptr::null_mut();
     }
-    let vm_ptr = vm as *mut BoyiaVM;
-    if (*vm_ptr).mCpu.is_null() {
-        return ptr::null_mut();
-    }
-    &mut (*(*vm_ptr).mCpu).mReg0
+    &mut (*(*vm).mCpu).mReg0
 }
 
 /// Get native helper result (reg1).
-pub unsafe fn get_native_helper_result(vm: *mut LVoid) -> *mut BoyiaValue {
-    if vm.is_null() {
+pub unsafe fn get_native_helper_result(vm: &mut BoyiaVM) -> *mut BoyiaValue {
+    if (*vm).mCpu.is_null() {
         return ptr::null_mut();
     }
-    let vm_ptr = vm as *mut BoyiaVM;
-    if (*vm_ptr).mCpu.is_null() {
-        return ptr::null_mut();
-    }
-    &mut (*(*vm_ptr).mCpu).mReg1
+    &mut (*(*vm).mCpu).mReg1
 }
 
 /// Get current scope local stack size.
-pub unsafe fn get_local_size(vm: *mut LVoid) -> LInt {
-    if vm.is_null() {
+pub unsafe fn get_local_size(vm: &mut BoyiaVM) -> LInt {
+    if (*vm).mEState.is_null() {
         return 0;
     }
-    let vm_ptr = vm as *mut BoyiaVM;
-    if (*vm_ptr).mEState.is_null() {
-        return 0;
-    }
-    let e_state = (*vm_ptr).mEState;
+    let e_state = (*vm).mEState;
     if (*e_state).mFrameIndex > 0 {
         let frame_idx = ((*e_state).mFrameIndex - 1) as usize;
         let prev_frame = &(*e_state).mExecStack[frame_idx];
@@ -137,19 +124,15 @@ pub unsafe fn get_local_size(vm: *mut LVoid) -> LInt {
 }
 
 /// Get local value by index.
-pub unsafe fn get_local_value(idx: LInt, vm: *mut LVoid) -> *mut LVoid {
-    if vm.is_null() {
-        return ptr::null_mut();
-    }
+pub unsafe fn get_local_value(idx: LInt, vm: &mut BoyiaVM) -> *mut LVoid {
     let size = get_local_size(vm);
     if idx < 0 || idx >= size {
         return ptr::null_mut();
     }
-    let vm_ptr = vm as *mut BoyiaVM;
-    if (*vm_ptr).mEState.is_null() {
+    if (*vm).mEState.is_null() {
         return ptr::null_mut();
     }
-    let e_state = (*vm_ptr).mEState;
+    let e_state = (*vm).mEState;
     let start = if (*e_state).mFrameIndex > 0 {
         let frame_idx = ((*e_state).mFrameIndex - 1) as usize;
         (*e_state).mExecStack[frame_idx].mLValSize
@@ -164,15 +147,12 @@ pub unsafe fn get_local_value(idx: LInt, vm: *mut LVoid) -> *mut LVoid {
 /// If that value is a function type, returns its [`BoyiaFunction`] pointer, the address of the first
 /// closure capture in [`BoyiaFunction::mParams`] (i.e. `mParams + mParamSize`), and [`BoyiaFunction::mCaptureCount`].
 /// If there are no captures, `captures` is null and `capture_count` is 0.
-pub unsafe fn get_callee_and_captures_from_locals(vm: *mut LVoid) -> CalleeCapturesInfo {
+pub unsafe fn get_callee_and_captures_from_locals(vm: &mut BoyiaVM) -> CalleeCapturesInfo {
     let mut out = CalleeCapturesInfo {
         callee: ptr::null_mut(),
         captures: ptr::null_mut(),
         capture_count: 0,
     };
-    if vm.is_null() {
-        return out;
-    }
     let val = get_local_value(0, vm) as *mut BoyiaValue;
     if val.is_null() {
         return out;
@@ -210,15 +190,14 @@ pub unsafe fn get_callee_and_captures_from_locals(vm: *mut LVoid) -> CalleeCaptu
 }
 
 /// Push local value.
-pub unsafe fn local_push(value: *mut BoyiaValue, vm: *mut LVoid) {
-    if value.is_null() || vm.is_null() {
+pub unsafe fn local_push(value: *mut BoyiaValue, vm: &mut BoyiaVM) {
+    if value.is_null() {
         return;
     }
-    let vm_ptr = vm as *mut BoyiaVM;
-    if (*vm_ptr).mEState.is_null() {
+    if (*vm).mEState.is_null() {
         return;
     }
-    let e_state = (*vm_ptr).mEState;
+    let e_state = (*vm).mEState;
     if (*e_state).mStackFrame.mLValSize >= NUM_LOCAL_VARS as i32 {
         return;
     }
@@ -233,7 +212,7 @@ pub unsafe fn get_local_stack(
     size: *mut LInt,
     op_stack: *mut LIntPtr,
     op_size: *mut LInt,
-    vm: *mut LVoid,
+    vm: &mut BoyiaVM,
     ptr: *mut LVoid,
 ) -> *mut LVoid {
     if ptr.is_null() {
@@ -242,9 +221,8 @@ pub unsafe fn get_local_stack(
         }
         return ptr::null_mut();
     }
-    let vm_ptr = vm as *mut BoyiaVM;
-    let state = if vm == ptr {
-        (*vm_ptr).mESLink
+    let state = if vm_as_void(vm) == ptr {
+        (*vm).mESLink
     } else {
         ptr as *mut ExecState
     };
@@ -270,33 +248,22 @@ pub unsafe fn get_local_stack(
 }
 
 /// Get global table pointer and size.
-pub unsafe fn get_global_table(table: *mut LIntPtr, size: *mut LInt, vm: *mut LVoid) {
-    if vm.is_null() {
-        return;
-    }
-    let vm_ptr = vm as *mut BoyiaVM;
+pub unsafe fn get_global_table(table: *mut LIntPtr, size: *mut LInt, vm: &mut BoyiaVM) {
     if !table.is_null() {
-        *table = (*vm_ptr).mGlobals as LIntPtr;
+        *table = (*vm).mGlobals as LIntPtr;
     }
     if !size.is_null() {
-        *size = (*vm_ptr).mGValSize;
+        *size = (*vm).mGValSize;
     }
 }
 
 /// Get creator (runtime) from VM as `*mut dyn Runtime`.
-pub unsafe fn get_vm_creator(vm: *mut LVoid) -> *mut dyn Runtime {
-    if vm.is_null() {
-        return mem::transmute([ptr::null_mut::<LVoid>(), ptr::null_mut::<LVoid>()]);
-    }
-    let vm_ptr = vm as *mut BoyiaVM;
-    (*vm_ptr).mCreator
+pub unsafe fn get_vm_creator(vm: &mut BoyiaVM) -> *mut dyn Runtime {
+    (*vm).mCreator
 }
 
 /// Set integer result in reg0.
-pub unsafe fn set_int_result(result: LInt, vm: *mut LVoid) -> LInt {
-    if vm.is_null() {
-        return OpHandleResult::kOpResultEnd as i32;
-    }
+pub unsafe fn set_int_result(result: LInt, vm: &mut BoyiaVM) -> LInt {
     let mut val = BoyiaValue {
         mNameKey: 0,
         mValueType: ValueType::BY_INT,
@@ -358,16 +325,15 @@ const BOYIA_VECTOR_GROW_DELTA: LInt = 10;
 /// update `mParamCount` lower 16 bits to the new capacity (preserving high 16 bits).
 ///
 /// Returns `false` if the VM/creator is invalid or allocation fails.
-pub unsafe fn vector_params_grow_if_full(fun: *mut BoyiaFunction, vm: *mut LVoid) -> bool {
-    if fun.is_null() || vm.is_null() {
+pub unsafe fn vector_params_grow_if_full(fun: *mut BoyiaFunction, vm: &mut BoyiaVM) -> bool {
+    if fun.is_null() {
         return false;
     }
     let cap = get_function_count(fun);
     if (*fun).mParamSize < cap {
         return true;
     }
-    let vm_ptr = vm as *mut BoyiaVM;
-    let creator = (*vm_ptr).mCreator;
+    let creator = (*vm).mCreator;
     if creator.is_null() {
         return false;
     }
@@ -457,7 +423,7 @@ enum InitVmStage {
 
 /// `completed` = last fully successful milestone. Frees in reverse order; always returns null.
 unsafe fn init_vm_abort(vm_ptr: *mut BoyiaVM, completed: InitVmStage) -> *mut LVoid {
-    if vm_ptr.is_null() {
+    if false /* vm is reference */ {
         return ptr::null_mut();
     }
     let vm = &mut *vm_ptr;
@@ -518,7 +484,7 @@ pub unsafe fn init_vm_boxed(creator: *mut dyn Runtime) -> Option<Box<BoyiaVM>> {
     eprintln!("[init_vm] 1 alloc BoyiaVM");
     let layout = Layout::new::<BoyiaVM>();
     let vm_ptr = alloc_zeroed(layout) as *mut BoyiaVM;
-    if vm_ptr.is_null() {
+    if false /* vm is reference */ {
         eprintln!("[init_vm] ERROR vm_ptr null");
         return None;
     }
@@ -669,12 +635,11 @@ pub unsafe fn destroy_vm(vm: *mut LVoid) {
 // Load string table / instructions / entry table
 // ---------------------------------------------------------------------------
 
-pub unsafe fn load_string_table(string_table: *mut BoyiaStr, size: LInt, vm: *mut LVoid) {
-    if vm.is_null() || string_table.is_null() || size <= 0 {
+pub unsafe fn load_string_table(string_table: *mut BoyiaStr, size: LInt, vm: &mut BoyiaVM) {
+    if string_table.is_null() || size <= 0 {
         return;
     }
-    let vm_ptr = vm as *mut BoyiaVM;
-    let str_table = &mut (*vm_ptr).mStrTable;
+    let str_table = &mut (*vm).mStrTable;
     let copy_size = if size as usize > CONST_CAPACITY {
         CONST_CAPACITY
     } else {
@@ -683,23 +648,21 @@ pub unsafe fn load_string_table(string_table: *mut BoyiaStr, size: LInt, vm: *mu
     str_table.load_from_buffer(string_table, copy_size);
 }
 
-pub unsafe fn load_instructions(buffer: *mut LVoid, size: LInt, vm: *mut LVoid) {
-    if vm.is_null() || buffer.is_null() || size <= 0 {
+pub unsafe fn load_instructions(buffer: *mut LVoid, size: LInt, vm: &mut BoyiaVM) {
+    if buffer.is_null() || size <= 0 {
         return;
     }
-    let vm_ptr = vm as *mut BoyiaVM;
-    let vmcode = &mut (*vm_ptr).mVMCode;
+    let vmcode = &mut (*vm).mVMCode;
     let instruction_size = mem::size_of::<Instruction>();
     let count = (size as usize) / instruction_size;
     vmcode.load_from_buffer(buffer as *const Instruction, count);
 }
 
-pub unsafe fn load_entry_table(buffer: *mut LVoid, size: LInt, vm: *mut LVoid) {
-    if vm.is_null() || buffer.is_null() || size <= 0 {
+pub unsafe fn load_entry_table(buffer: *mut LVoid, size: LInt, vm: &mut BoyiaVM) {
+    if buffer.is_null() || size <= 0 {
         return;
     }
-    let vm_ptr = vm as *mut BoyiaVM;
-    let entry = &mut (*vm_ptr).mEntry;
+    let entry = &mut (*vm).mEntry;
     let int_size = mem::size_of::<LInt>();
     let count = (size as usize) / int_size;
     entry.load_from_buffer(buffer as *const LInt, count);
@@ -730,7 +693,7 @@ fn is_object_prop_func(type_: ValueType) -> bool {
 
 pub(crate) unsafe fn init_function(fun: *mut BoyiaFunction, vm: *mut BoyiaVM) {
     eprintln!("[init_function] fun={:?}", fun);
-    if fun.is_null() || vm.is_null() {
+    if fun.is_null() {
         eprintln!("[init_function] null arg");
         return;
     }
@@ -839,21 +802,16 @@ unsafe fn copy_function(
 
 /// Compile Boyia source: parse top-level var/fun/class and register in VM.
 /// Does not emit bytecode; use LoadInstructions/LoadEntryTable for pre-compiled code.
-pub unsafe fn compile_code(code: *mut LInt8, vm: *mut LVoid) {
-    if code.is_null() || vm.is_null() {
+pub unsafe fn compile_code(code: *mut LInt8, vm: &mut BoyiaVM) {
+    if code.is_null() {
         return;
     }
     crate::compile::parse_and_register(code, vm as *mut BoyiaVM);
 }
 
 /// Create object from local 0 class; set reg0.
-pub unsafe fn create_object(vm: *mut LVoid) -> LInt {
+pub unsafe fn create_object(vm: &mut BoyiaVM) -> LInt {
     eprintln!("[create_object] called");
-    if vm.is_null() {
-        eprintln!("[create_object] -> kOpResultEnd (vm null)");
-        return OpHandleResult::kOpResultEnd as i32;
-    }
-    let vm_ptr = vm as *mut BoyiaVM;
     let value = get_local_value(0, vm) as *mut BoyiaValue;
     if value.is_null() {
         eprintln!("[create_object] -> kOpResultEnd (local 0 null)");
@@ -869,9 +827,9 @@ pub unsafe fn create_object(vm: *mut LVoid) -> LInt {
         eprintln!("[create_object] -> kOpResultEnd (local 0 not BY_CLASS)");
         return OpHandleResult::kOpResultEnd as i32;
     }
-    let result = &mut (*(*vm_ptr).mCpu).mReg0;
+    let result = &mut (*(*vm).mCpu).mReg0;
     value_copy(result, value);
-    let new_func = copy_function(value, NUM_FUNC_PARAMS as LInt, vm_ptr);
+    let new_func = copy_function(value, NUM_FUNC_PARAMS as LInt, vm as *mut BoyiaVM);
     if new_func.is_null() {
         eprintln!("[create_object] -> kOpResultEnd (copy_function returned null)");
         return OpHandleResult::kOpResultEnd as i32;
@@ -883,7 +841,7 @@ pub unsafe fn create_object(vm: *mut LVoid) -> LInt {
         new_func, class_name_key
     );
 
-    let rt = get_runtime_from_vm(vm as *mut LVoid);
+    let rt = get_runtime_from_vm(vm);
     if rt.is_null() {
         return OpHandleResult::kOpResultEnd as i32;
     }
@@ -892,12 +850,8 @@ pub unsafe fn create_object(vm: *mut LVoid) -> LInt {
 }
 
 /// Cache VM code: clear inline caches, patch instructions.
-pub unsafe fn cache_vm_code(vm: *mut LVoid) {
-    if vm.is_null() {
-        return;
-    }
-    let vm_ptr = vm as *mut BoyiaVM;
-    let vmcode = &mut (*vm_ptr).mVMCode;
+pub unsafe fn cache_vm_code(vm: &mut BoyiaVM) {
+    let vmcode = &mut (*vm).mVMCode;
     if vmcode.is_empty() {
         return;
     }
@@ -923,21 +877,20 @@ pub unsafe fn cache_vm_code(vm: *mut LVoid) {
 }
 
 /// Copy object by global key and size.
-pub unsafe fn copy_object(hash_key: LUintPtr, size: LInt, vm: *mut LVoid) -> *mut LVoid {
-    if vm.is_null() || size <= 0 {
+pub unsafe fn copy_object(hash_key: LUintPtr, size: LInt, vm: &mut BoyiaVM) -> *mut LVoid {
+    if size <= 0 {
         return ptr::null_mut();
     }
-    let vm_ptr = vm as *mut BoyiaVM;
-    let global = find_global(hash_key, vm_ptr);
+    let global = find_global(hash_key, vm as *mut BoyiaVM);
     if global.is_null() {
         return ptr::null_mut();
     }
-    let obj_body = copy_function(global, size, vm_ptr);
+    let obj_body = copy_function(global, size, vm as *mut BoyiaVM);
     if obj_body.is_null() {
         return ptr::null_mut();
     }
 
-    let rt = get_runtime_from_vm(vm as *mut LVoid);
+    let rt = get_runtime_from_vm(vm);
     if rt.is_null() {
         return ptr::null_mut();
     }
@@ -986,22 +939,21 @@ pub unsafe fn native_call_impl(
     args: *mut BoyiaValue,
     argc: LInt,
     obj: *mut BoyiaValue,
-    vm: *mut LVoid,
+    vm: &mut BoyiaVM,
 ) -> OpHandleResult {
-    if vm.is_null() || args.is_null() {
+    if args.is_null() {
         return OpHandleResult::kOpResultSuccess;
     }
-    let vm_ptr = vm as *mut BoyiaVM;
-    let current = (*vm_ptr).mEState;
+    let current = (*vm).mEState;
     // 第一个参数为调用该函数的函数指针
     let value = args.add(0);
     eprintln!("[native_call_impl] HandlePushParams functionName={}", (*value).mValueType as u8);
-    let state = create_exec_state(vm_ptr);
+    let state = create_exec_state(vm as *mut BoyiaVM);
     if state.is_null() {
         return OpHandleResult::kOpResultEnd;
     }
-    switch_exec_state(state, vm_ptr);
-    let _ = crate::execute::handle_push_scene(ptr::null(), vm_ptr);
+    switch_exec_state(state, vm as *mut BoyiaVM);
+    let _ = crate::execute::handle_push_scene(ptr::null(), vm as *mut BoyiaVM);
     let start = (*state).mExecStack.as_ptr().add((*state).mFrameIndex as usize - 1).read().mLValSize;
     for idx in 0..argc {
         value_copy(
@@ -1016,24 +968,24 @@ pub unsafe fn native_call_impl(
         let nav_fun = std::mem::transmute::<_, NativePtr>((*func).mFuncBody);
         nav_fun(vm);
     } else {
-        crate::execute::assign_state_class((*vm_ptr).mEState, obj);
+        crate::execute::assign_state_class((*vm).mEState, obj);
         let cmds = (*func).mFuncBody as *const CommandTable;
-        (*(*vm_ptr).mEState).mStackFrame.mContext = cmds as *mut CommandTable;
-        (*(*vm_ptr).mEState).mStackFrame.mPC = (*cmds).mBegin;
-        crate::execute::exec_instruction(vm_ptr);
+        (*(*vm).mEState).mStackFrame.mContext = cmds as *mut CommandTable;
+        (*(*vm).mEState).mStackFrame.mPC = (*cmds).mBegin;
+        crate::execute::exec_instruction(vm as *mut BoyiaVM);
     }
-    destroy_exec_state(state, vm_ptr);
-    switch_exec_state(current, vm_ptr);
+    destroy_exec_state(state, vm as *mut BoyiaVM);
+    switch_exec_state(current, vm as *mut BoyiaVM);
     OpHandleResult::kOpResultSuccess
 }
 
 /// Get runtime as `*mut dyn Runtime` from VM ([BoyiaVM::mCreator]).
-pub unsafe fn get_runtime_from_vm(vm: *mut LVoid) -> *mut dyn Runtime {
+pub unsafe fn get_runtime_from_vm(vm: &mut BoyiaVM) -> *mut dyn Runtime {
     get_vm_creator(vm)
 }
 
 /// Find native function index by name key. Uses [get_runtime_from_vm] to get [Runtime] and calls [Runtime::find_native_func]. Crate-internal only.
-pub(crate) unsafe fn find_native_func(vm: *mut LVoid, key: LUintPtr) -> LInt {
+pub(crate) unsafe fn find_native_func(vm: &mut BoyiaVM, key: LUintPtr) -> LInt {
     let rt = get_runtime_from_vm(vm);
     if rt.is_null() {
         return -1;
@@ -1042,16 +994,16 @@ pub(crate) unsafe fn find_native_func(vm: *mut LVoid, key: LUintPtr) -> LInt {
 }
 
 /// Call native function by index. Uses [get_runtime_from_vm] to get [Runtime] and calls [Runtime::call_native_function].
-pub unsafe fn native_call_by_index(vm: *mut LVoid, idx: LInt) -> LInt {
+pub unsafe fn native_call_by_index(vm: &mut BoyiaVM, idx: LInt) -> LInt {
     let rt = get_runtime_from_vm(vm);
     if rt.is_null() {
         return OpHandleResult::kOpResultSuccess as i32;
     }
-    (*rt).call_native_function(idx)
+    (&mut *rt).call_native_function(vm, idx)
 }
 
 /// Get identifier for a string buffer via [Runtime::gen_ident_by_str].
-pub unsafe fn gen_identifier_from_str(vm: *mut LVoid, s: *const BoyiaStr) -> LUintPtr {
+pub unsafe fn gen_identifier_from_str(vm: &mut BoyiaVM, s: *const BoyiaStr) -> LUintPtr {
     let rt = get_runtime_from_vm(vm);
     if rt.is_null() {
         return 0;
@@ -1060,7 +1012,7 @@ pub unsafe fn gen_identifier_from_str(vm: *mut LVoid, s: *const BoyiaStr) -> LUi
 }
 
 /// Reverse identifier key → string (C++ `GetIdentName`). Used by Json `toString` / Map serialization.
-pub unsafe fn name_for_identifier(vm: *mut LVoid, id: LUintPtr) -> Option<String> {
+pub unsafe fn name_for_identifier(vm: &mut BoyiaVM, id: LUintPtr) -> Option<String> {
     let rt = get_runtime_from_vm(vm);
     if rt.is_null() {
         return None;
@@ -1069,27 +1021,20 @@ pub unsafe fn name_for_identifier(vm: *mut LVoid, id: LUintPtr) -> Option<String
 }
 
 /// Create global class value.
-pub unsafe fn create_global_class(key: LUintPtr, vm: *mut LVoid) -> *mut LVoid {
+pub unsafe fn create_global_class(key: LUintPtr, vm: &mut BoyiaVM) -> *mut LVoid {
     eprintln!("[create_global_class] key={}", key);
-    if vm.is_null() {
-        eprintln!("[create_global_class] vm null");
-        return ptr::null_mut();
-    }
     let val = create_fun_val(key, ValueType::BY_CLASS, vm as *mut BoyiaVM) as *mut LVoid;
     eprintln!("[create_global_class] done val={:?}", val);
     val
 }
 
 /// MicroTask class name key (for HandleAwait). Per BoyiaValue.h BuiltinId::kBoyiaMicroTask = 6.
-pub(crate) unsafe fn micro_task_class_key(_vm: *mut LVoid) -> LUintPtr {
+pub(crate) unsafe fn micro_task_class_key(_vm: &mut BoyiaVM) -> LUintPtr {
     BuiltinId::kBoyiaMicroTask.as_key()
 }
 
 /// Create a MicroTask instance object. Match CreateMicroTaskObject in BoyiaValue.cpp.
-pub(crate) unsafe fn create_micro_task_object(vm: *mut LVoid) -> *mut BoyiaFunction {
-    if vm.is_null() {
-        return ptr::null_mut();
-    }
+pub(crate) unsafe fn create_micro_task_object(vm: &mut BoyiaVM) -> *mut BoyiaFunction {
     copy_object(micro_task_class_key(vm), 32, vm) as *mut BoyiaFunction
 }
 
@@ -1098,18 +1043,13 @@ pub(crate) unsafe fn create_micro_task_object(vm: *mut LVoid) -> *mut BoyiaFunct
 // ---------------------------------------------------------------------------
 
 /// Allocate a function slot for a builtin method (mFuncBody = native_ptr). Returns null if no slot.
-pub unsafe fn alloc_builtin_function(vm: *mut LVoid, native_ptr: NativePtr) -> *mut BoyiaFunction {
-    if vm.is_null() {
-        eprintln!("[alloc_builtin_function] vm null");
+pub unsafe fn alloc_builtin_function(vm: &mut BoyiaVM, native_ptr: NativePtr) -> *mut BoyiaFunction {
+    if (*vm).mFunSize as usize >= NUM_FUNC {
+        eprintln!("[alloc_builtin_function] mFunSize full {}", (*vm).mFunSize);
         return ptr::null_mut();
     }
-    let vm_ptr = vm as *mut BoyiaVM;
-    if (*vm_ptr).mFunSize as usize >= NUM_FUNC {
-        eprintln!("[alloc_builtin_function] mFunSize full {}", (*vm_ptr).mFunSize);
-        return ptr::null_mut();
-    }
-    let fun = (*vm_ptr).mFunTable.add((*vm_ptr).mFunSize as usize);
-    (*vm_ptr).mFunSize += 1;
+    let fun = (*vm).mFunTable.add((*vm).mFunSize as usize);
+    (*vm).mFunSize += 1;
     // slot already zeroed from init_vm alloc_zeroed(mFunTable)
     (*fun).mFuncBody = native_ptr as LIntPtr;
     (*fun).mParams = ptr::null_mut();
@@ -1308,7 +1248,7 @@ pub(crate) unsafe fn fetch_string(str_out: *mut BoyiaStr, value: *const BoyiaVal
 
 /// Release temp buffer from [`fetch_string`] when `source` was `BY_INT` or `BY_REAL` (pool alloc). String/object views must not be freed here.
 unsafe fn release_fetch_string_temp(s: BoyiaStr, source: *const BoyiaValue, vm: *mut BoyiaVM) {
-    if source.is_null() || vm.is_null() {
+    if source.is_null() {
         return;
     }
     let vt = (*source).mValueType;
@@ -1327,7 +1267,7 @@ unsafe fn release_fetch_string_temp(s: BoyiaStr, source: *const BoyiaValue, vm: 
 
 /// String concatenation: left + right, result stored in right (R0). Match StringAdd in BoyiaValue.cpp.
 pub(crate) unsafe fn string_add(left: *const BoyiaValue, right: *mut BoyiaValue, vm: *mut BoyiaVM) {
-    if left.is_null() || right.is_null() || vm.is_null() {
+    if left.is_null() || right.is_null() {
         return;
     }
     let mut left_str = BoyiaStr {
@@ -1362,7 +1302,7 @@ pub(crate) unsafe fn string_add(left: *const BoyiaValue, right: *mut BoyiaValue,
     release_fetch_string_temp(left_str, left, vm);
     release_fetch_string_temp(right_str, right, vm);
 
-    let obj_body = create_string_object(concat, len, vm as *mut LVoid);
+    let obj_body = create_string_object(concat, len, &mut *vm);
     if obj_body.is_null() {
         if !creator.is_null() {
             (*creator).delete_data(concat as *mut LVoid);
@@ -1377,10 +1317,7 @@ pub(crate) unsafe fn string_add(left: *const BoyiaValue, right: *mut BoyiaValue,
 
 /// CreateStringObject(LInt8* buffer, LInt len, LVoid* vm) per BoyiaValue.cpp.
 /// CopyObject(kBoyiaString, 32, vm), set mParams[1].mStrVal, mParams[0].mIntVal = GenHashCode.
-pub unsafe fn create_string_object(buffer: *mut LInt8, len: LInt, vm: *mut LVoid) -> *mut BoyiaFunction {
-    if vm.is_null() {
-        return ptr::null_mut();
-    }
+pub unsafe fn create_string_object(buffer: *mut LInt8, len: LInt, vm: &mut BoyiaVM) -> *mut BoyiaFunction {
     let key = BuiltinId::kBoyiaString.as_key();
     let obj = copy_object(key, 32, vm) as *mut BoyiaFunction;
     if obj.is_null() {
@@ -1406,8 +1343,8 @@ pub unsafe fn create_string_object(buffer: *mut LInt8, len: LInt, vm: *mut LVoid
 /// CreateConstString(BoyiaValue* value, LInt8* buffer, LInt len, LVoid* vm) per BoyiaValue.cpp.
 /// CreateStringObject; fill value (BY_CLASS, mPtr, mSuper=K_BOYIA_NULL); mark objBody->mParamCount |= (kConstStringBuffer << 18).
 /// Returns true on success (caller can return kOpResultEnd if false).
-pub unsafe fn create_const_string(value: *mut BoyiaValue, buffer: *mut LInt8, len: LInt, vm: *mut LVoid) -> bool {
-    if value.is_null() || vm.is_null() {
+pub unsafe fn create_const_string(value: *mut BoyiaValue, buffer: *mut LInt8, len: LInt, vm: &mut BoyiaVM) -> bool {
+    if value.is_null() {
         return false;
     }
     let obj_body = create_string_object(buffer, len, vm);
@@ -1423,8 +1360,8 @@ pub unsafe fn create_const_string(value: *mut BoyiaValue, buffer: *mut LInt8, le
 
 /// CreateNativeString(BoyiaValue* value, LInt8* buffer, LInt len, LVoid* vm) per BoyiaValue.cpp.
 /// CreateStringObject; fill value; mark objBody->mParamCount |= (kNativeStringBuffer << 18).
-pub unsafe fn create_native_string(value: *mut BoyiaValue, buffer: *mut LInt8, len: LInt, vm: *mut LVoid) {
-    if value.is_null() || vm.is_null() {
+pub unsafe fn create_native_string(value: *mut BoyiaValue, buffer: *mut LInt8, len: LInt, vm: &mut BoyiaVM) {
+    if value.is_null() {
         return;
     }
     let obj_body = create_string_object(buffer, len, vm);
@@ -1443,7 +1380,7 @@ pub unsafe fn create_native_string(value: *mut BoyiaValue, buffer: *mut LInt8, l
 // ---------------------------------------------------------------------------
 
 unsafe fn add_micro_task(task: *mut MicroTask, vm: *mut BoyiaVM) {
-    if task.is_null() || vm.is_null() {
+    if task.is_null() {
         return;
     }
     let queue = (*vm).mTaskQueue;
@@ -1479,7 +1416,7 @@ unsafe fn alloc_micro_task_list_append(list: *mut MicroTaskList, task: *mut Micr
 
 /// Free a micro task (return to alloc list / dealloc). Used by exec_pop_function and consume_micro_task.
 pub(crate) unsafe fn free_micro_task(task: *mut MicroTask, vm: *mut BoyiaVM) {
-    if task.is_null() || vm.is_null() {
+    if task.is_null() {
         return;
     }
     let queue = (*vm).mTaskQueue;
@@ -1528,11 +1465,11 @@ pub(crate) unsafe fn alloc_micro_task(vm: *mut BoyiaVM) -> *mut MicroTask {
 // ---------------------------------------------------------------------------
 
 /// Create micro task; value copied to mObjRef.
-pub unsafe fn create_micro_task(vm_ptr: *mut LVoid, value: *mut BoyiaValue) -> *mut LVoid {
-    if vm_ptr.is_null() {
+pub unsafe fn create_micro_task(vm: &mut BoyiaVM, value: *mut BoyiaValue) -> *mut LVoid {
+    if false /* vm is reference */ {
         return ptr::null_mut();
     }
-    let vm = vm_ptr as *mut BoyiaVM;
+    let vm = vm as *mut BoyiaVM;
     let task = alloc_micro_task(vm);
     if task.is_null() {
         return ptr::null_mut();
@@ -1548,9 +1485,9 @@ pub unsafe fn create_micro_task(vm_ptr: *mut LVoid, value: *mut BoyiaValue) -> *
 pub unsafe fn resume_micro_task(
     task_ptr: *mut LVoid,
     value: *mut BoyiaValue,
-    vm_ptr: *mut LVoid,
+    vm: &mut BoyiaVM,
 ) {
-    if task_ptr.is_null() || vm_ptr.is_null() {
+    if task_ptr.is_null() {
         return;
     }
     let task = task_ptr as *mut MicroTask;
@@ -1559,7 +1496,7 @@ pub unsafe fn resume_micro_task(
     }
 
     println!("call resume_micro_task");
-    add_micro_task(task, vm_ptr as *mut BoyiaVM);
+    add_micro_task(task, vm as *mut BoyiaVM);
 }
 
 /// Switch current exec state to the given one; updates vm's mEState, mLocals, mOpStack, mLoopStack, mExecStack.
@@ -1602,11 +1539,11 @@ pub(crate) unsafe fn destroy_exec_state(state: *mut ExecState, vm: *mut BoyiaVM)
 /// copy task->mResult to Reg0, ExecInstruction; if aes->mStackFrame.mContext is null then
 /// copy Reg0 to mTopTask->mResult and AddMicroTask(mTopTask), then DestroyExecState(aes) when mLast->mWait;
 /// switch back; unlink task and FreeMicroTask.
-pub unsafe fn consume_micro_task(vm_ptr: *mut LVoid) {
-    if vm_ptr.is_null() {
+pub unsafe fn consume_micro_task(vm: &mut BoyiaVM) {
+    if false /* vm is reference */ {
         return;
     }
-    let vm = vm_ptr as *mut BoyiaVM;
+    let vm = vm as *mut BoyiaVM;
     let queue_ptr = (*vm).mTaskQueue;
     if queue_ptr.is_null() {
         return;
@@ -1651,7 +1588,7 @@ pub unsafe fn consume_micro_task(vm_ptr: *mut LVoid) {
 pub unsafe fn iterate_micro_task(
     obj: *mut *mut BoyiaValue,
     result: *mut *mut BoyiaValue,
-    vm_ptr: *mut LVoid,
+    vm: &mut BoyiaVM,
     ptr: *mut LVoid,
 ) -> *mut LVoid {
     if !result.is_null() {
@@ -1663,15 +1600,12 @@ pub unsafe fn iterate_micro_task(
     if ptr.is_null() {
         return ptr::null_mut();
     }
-    let vm = vm_ptr as *mut BoyiaVM;
-    if vm.is_null() {
-        return ptr::null_mut();
-    }
-    let queue = (*vm).mTaskQueue;
+    let vm_raw = vm as *mut BoyiaVM;
+    let queue = (*vm_raw).mTaskQueue;
     if queue.is_null() {
         return ptr::null_mut();
     }
-    let task = if vm_ptr == ptr {
+    let task = if vm_as_void(vm) == ptr {
         (*queue).mAllocTasks.mHead
     } else {
         ptr as *mut MicroTask

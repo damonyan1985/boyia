@@ -37,8 +37,8 @@ pub const MAX_INLINE_CACHE: usize = 5;
 pub trait Runtime {
     /// Find native function index by name key; -1 if not found.
     fn find_native_func(&self, key: LUintPtr) -> LInt;
-    /// Call native function by index; returns op result (e.g. kOpResultSuccess).
-    fn call_native_function(&self, idx: LInt) -> LInt;
+    /// Call native function by index; `vm` is the active VM instance.
+    fn call_native_function(&mut self, vm: &mut BoyiaVM, idx: LInt) -> LInt;
     /// Get or assign id for a string key (e.g. compile token name).
     fn gen_identifier(&mut self, key: &str) -> LUintPtr;
     /// Get or assign id for a string from [BoyiaStr] (e.g. Map key, builtins).
@@ -967,8 +967,24 @@ pub struct BoyiaVM {
     pub(crate) mCreator: *mut dyn Runtime,
 }
 
+/// Cast VM reference to legacy void pointer (GC / memory pool boundaries).
+#[inline]
+pub fn vm_as_void(vm: &mut BoyiaVM) -> *mut LVoid {
+    vm as *mut BoyiaVM as *mut LVoid
+}
+
+/// Recover VM reference from legacy void pointer. Returns `None` if null.
+#[inline]
+pub unsafe fn vm_from_void(vm: *mut LVoid) -> Option<&'static mut BoyiaVM> {
+    if vm.is_null() {
+        None
+    } else {
+        Some(&mut *(vm as *mut BoyiaVM))
+    }
+}
+
 // Native function pointer type (return OpHandleResult for VM dispatch).
-pub type NativePtr = unsafe fn(*mut LVoid) -> OpHandleResult;
+pub type NativePtr = unsafe fn(&mut BoyiaVM) -> OpHandleResult;
 
 pub struct NativeFunction {
     pub mNameKey: LUintPtr,

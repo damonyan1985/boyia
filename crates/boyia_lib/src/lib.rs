@@ -4,17 +4,12 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
-use boyia_vm::{
-    get_local_size, get_local_value, get_runtime_from_vm, get_string_buffer, get_boyia_class_id,
-    BoyiaValue, LVoid, OpHandleResult, ValueType,
-};
+use boyia_vm::{get_local_size, get_local_value, get_runtime_from_vm, get_string_buffer, get_boyia_class_id,
+    BoyiaValue, LVoid, OpHandleResult, ValueType, BoyiaVM};
 use std::path::{Path, PathBuf};
 
 /// new: create object from local 0 (class). Match CreateObject in BoyiaCore.cpp.
-pub unsafe fn create_object(vm: *mut LVoid) -> OpHandleResult {
-    if vm.is_null() {
-        return OpHandleResult::kOpResultEnd;
-    }
+pub unsafe fn create_object(vm: &mut BoyiaVM) -> OpHandleResult {
     if boyia_vm::create_object(vm) == 0 {
         OpHandleResult::kOpResultEnd
     } else {
@@ -23,11 +18,8 @@ pub unsafe fn create_object(vm: *mut LVoid) -> OpHandleResult {
 }
 
 /// BY_Log: local0 = value; print int or string to stdout.
-pub unsafe fn log_print(vm: *mut LVoid) -> OpHandleResult {
+pub unsafe fn log_print(vm: &mut BoyiaVM) -> OpHandleResult {
     eprintln!("[log_print] called");
-    if vm.is_null() {
-        return OpHandleResult::kOpResultEnd;
-    }
     let val = get_local_value(0, vm) as *const BoyiaValue;
     if val.is_null() {
         return OpHandleResult::kOpResultEnd;
@@ -58,7 +50,7 @@ pub unsafe fn log_print(vm: *mut LVoid) -> OpHandleResult {
 }
 
 /// String class key for BY_Log (same hash as builtins "String").
-unsafe fn string_class_key(vm: *mut boyia_vm::LVoid) -> boyia_vm::LUintPtr {
+unsafe fn string_class_key(vm: &mut BoyiaVM) -> boyia_vm::LUintPtr {
     static B: [u8; 7] = *b"String\0";
     let s = boyia_vm::BoyiaStr {
         mPtr: B.as_ptr() as *mut _,
@@ -68,7 +60,7 @@ unsafe fn string_class_key(vm: *mut boyia_vm::LVoid) -> boyia_vm::LUintPtr {
 }
 
 /// Read script path string from local 0 (String object). `vm` is required for class id check.
-unsafe fn require_path_from_local0(vm: *mut LVoid, val: *const BoyiaValue) -> Option<String> {
+unsafe fn require_path_from_local0(vm: &mut BoyiaVM, val: *const BoyiaValue) -> Option<String> {
     if val.is_null() || (*val).mValueType != ValueType::BY_CLASS {
         return None;
     }
@@ -115,11 +107,8 @@ fn resolve_require_path(base: &str, rel: &str) -> String {
 }
 
 /// `BoyiaLib.cpp` `requireFile` — native name `BY_Require` in C++ `initNativeFunction`.
-pub unsafe fn require_file(vm: *mut LVoid) -> OpHandleResult {
+pub unsafe fn require_file(vm: &mut BoyiaVM) -> OpHandleResult {
     println!("call require_file");
-    if vm.is_null() {
-        return OpHandleResult::kOpResultEnd;
-    }
     let rt = get_runtime_from_vm(vm);
     if rt.is_null() {
         return OpHandleResult::kOpResultEnd;

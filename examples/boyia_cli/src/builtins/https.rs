@@ -8,10 +8,8 @@ use super::r#async::{
     AsyncBuiltinResult, CallbackInfo,
 };
 use boyia_builtins::gen_builtin_class_function;
-use boyia_vm::{
-    get_local_size, get_local_value, set_int_result, BoyiaValue, NativePtr, LUintPtr, LVoid,
-    OpHandleResult,
-};
+use boyia_vm::{get_local_size, get_local_value, set_int_result, BoyiaValue, NativePtr, LUintPtr, LVoid,
+    OpHandleResult, BoyiaVM};
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
@@ -20,7 +18,7 @@ use std::time::Duration;
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
 /// Register the Https builtin class. Stores `runner_ptr` as a BY_INT prop on the class so load/request can get the runner and schedule callbacks.
-pub fn builtin_https_class<F>(vm: *mut LVoid, gen_id: &mut F, runner_ptr: *mut crate::runner::BoyiaRunner)
+pub fn builtin_https_class<F>(vm: &mut BoyiaVM, gen_id: &mut F, runner_ptr: *mut crate::runner::BoyiaRunner)
 where
     F: FnMut(&str) -> LUintPtr,
 {
@@ -118,7 +116,7 @@ fn execute_https_request(url: &str, params: Option<&str>) -> Result<String, Stri
         .map_err(|err| err.to_string())
 }
 
-unsafe fn https_load_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn https_load_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     if size < 3 {
         return OpHandleResult::kOpResultEnd;
@@ -142,7 +140,7 @@ unsafe fn https_load_impl(vm: *mut LVoid) -> OpHandleResult {
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn https_request_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn https_request_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     if size < 4 {
         return OpHandleResult::kOpResultEnd;

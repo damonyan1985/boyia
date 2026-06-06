@@ -9,7 +9,7 @@ impl Runtime for TestRuntime {
     fn find_native_func(&self, _key: usize) -> i32 {
         -1
     }
-    fn call_native_function(&self, _idx: i32) -> i32 {
+    fn call_native_function(&mut self, _vm: &mut boyia_vm::BoyiaVM, _idx: i32) -> i32 {
         0
     }
     fn gen_identifier(&mut self, _key: &str) -> usize {

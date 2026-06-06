@@ -5,14 +5,12 @@
 #![allow(non_snake_case)]
 
 use crate::gen_builtin_class_function;
-use boyia_vm::{
-    copy_object, create_global_class, get_function_count, get_local_size, get_local_value,
+use boyia_vm::{copy_object, create_global_class, get_function_count, get_local_size, get_local_value,
     compare_value, set_int_result, set_native_result, value_copy, vector_params_grow_if_full,
-    BoyiaFunction, BoyiaValue, K_BOYIA_NULL, NativePtr, ValueType, LUintPtr, LVoid, OpHandleResult,
-};
+    BoyiaFunction, BoyiaValue, K_BOYIA_NULL, NativePtr, ValueType, LUintPtr, LVoid, OpHandleResult, BoyiaVM};
 
 /// get(index): return element at index. Match get_element_from_vector.
-unsafe fn array_get_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn array_get_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     let obj = get_local_value(size - 1, vm) as *const BoyiaValue;
     let index_val = get_local_value(1, vm) as *const BoyiaValue;
@@ -34,7 +32,7 @@ unsafe fn array_get_impl(vm: *mut LVoid) -> OpHandleResult {
 }
 
 /// add(element): append element. Match add_element_to_vector.
-unsafe fn array_add_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn array_add_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     let obj = get_local_value(size - 1, vm) as *mut BoyiaValue;
     let element = get_local_value(1, vm) as *const BoyiaValue;
@@ -61,7 +59,7 @@ unsafe fn array_add_impl(vm: *mut LVoid) -> OpHandleResult {
 }
 
 /// size(): return array length (int). Match get_vector_size.
-unsafe fn array_size_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn array_size_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     let obj = get_local_value(size - 1, vm) as *const BoyiaValue;
     if obj.is_null() {
@@ -76,7 +74,7 @@ unsafe fn array_size_impl(vm: *mut LVoid) -> OpHandleResult {
 }
 
 /// clear(): set length to 0. Match clear_vector with newSize=0.
-unsafe fn array_clear_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn array_clear_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     let obj = get_local_value(size - 1, vm) as *const BoyiaValue;
     if obj.is_null() {
@@ -91,7 +89,7 @@ unsafe fn array_clear_impl(vm: *mut LVoid) -> OpHandleResult {
 }
 
 /// removeAt(index): remove element at index, shift down. Match remove_element_width_index.
-unsafe fn array_remove_at_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn array_remove_at_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     let obj = get_local_value(size - 1, vm) as *const BoyiaValue;
     let idx_val = get_local_value(1, vm) as *const BoyiaValue;
@@ -116,7 +114,7 @@ unsafe fn array_remove_at_impl(vm: *mut LVoid) -> OpHandleResult {
 }
 
 /// remove(value): remove first match from end. Match remove_element_from_vector.
-unsafe fn array_remove_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn array_remove_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     let obj = get_local_value(size - 1, vm) as *const BoyiaValue;
     let val = get_local_value(1, vm) as *const BoyiaValue;
@@ -144,13 +142,10 @@ unsafe fn array_remove_impl(vm: *mut LVoid) -> OpHandleResult {
 }
 
 /// Register Array builtin class: get, add, size, clear, removeAt, remove.
-pub fn builtin_array_class<F>(vm: *mut LVoid, gen_id: &mut F)
+pub fn builtin_array_class<F>(vm: &mut BoyiaVM, gen_id: &mut F)
 where
     F: FnMut(&str) -> LUintPtr,
 {
-    if vm.is_null() {
-        return;
-    }
     let array_key = gen_id("Array");
     let class_ref = unsafe { create_global_class(array_key, vm) } as *mut BoyiaValue;
     if class_ref.is_null() {
@@ -172,6 +167,6 @@ where
 }
 
 /// Create an Array instance. Match CreateArrayObject.
-pub unsafe fn create_array_object(vm: *mut LVoid, array_class_key: LUintPtr) -> *mut LVoid {
+pub unsafe fn create_array_object(vm: &mut BoyiaVM, array_class_key: LUintPtr) -> *mut LVoid {
     copy_object(array_class_key, 32, vm)
 }

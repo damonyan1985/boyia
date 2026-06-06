@@ -4,11 +4,9 @@
 #![allow(non_snake_case)]
 
 use crate::gen_builtin_class_function;
-use boyia_vm::{
-    create_global_class, get_local_size, get_local_value, get_string_buffer, get_string_hash,
+use boyia_vm::{create_global_class, get_local_size, get_local_value, get_string_buffer, get_string_hash,
     set_native_result, BoyiaFunction, BoyiaStr, BoyiaValue, K_BOYIA_NULL, NativePtr, RealValue,
-    ValueType, LIntPtr, LUintPtr, LVoid, OpHandleResult,
-};
+    ValueType, LIntPtr, LUintPtr, LVoid, OpHandleResult, BoyiaVM};
 use std::ptr;
 
 fn str_eq(a: *const BoyiaStr, b: *const BoyiaStr) -> bool {
@@ -32,7 +30,7 @@ fn str_eq(a: *const BoyiaStr, b: *const BoyiaStr) -> bool {
     true
 }
 
-unsafe fn string_length_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn string_length_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     let obj = get_local_value(size - 1, vm) as *const BoyiaValue;
     let str_ref = get_string_buffer(obj);
@@ -50,7 +48,7 @@ unsafe fn string_length_impl(vm: *mut LVoid) -> OpHandleResult {
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn string_equal_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn string_equal_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     let obj = get_local_value(size - 1, vm) as *const BoyiaValue;
     let cmp_val = get_local_value(1, vm) as *const BoyiaValue;
@@ -71,15 +69,11 @@ unsafe fn string_equal_impl(vm: *mut LVoid) -> OpHandleResult {
 }
 
 /// Register String builtin class: buffer, hash props; length, equal methods.
-pub fn builtin_string_class<F>(vm: *mut LVoid, gen_id: &mut F)
+pub fn builtin_string_class<F>(vm: &mut BoyiaVM, gen_id: &mut F)
 where
     F: FnMut(&str) -> LUintPtr,
 {
     eprintln!("[builtin_string_class] 1");
-    if vm.is_null() {
-        eprintln!("[builtin_string_class] vm null");
-        return;
-    }
     let string_key = gen_id("String");
     eprintln!("[builtin_string_class] 2 create_global_class string_key={}", string_key);
     let class_ref = unsafe { create_global_class(string_key, vm) } as *mut BoyiaValue;

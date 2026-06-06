@@ -5,7 +5,7 @@
 #![allow(non_snake_case)]
 
 use crate::id_creator::IdCreator;
-use boyia_vm::{compile_code, LUintPtr, LVoid};
+use boyia_vm::{compile_code, BoyiaVM, LUintPtr};
 use std::collections::HashSet;
 use std::ffi::CString;
 use std::path::Path;
@@ -51,10 +51,7 @@ impl BoyiaCompileInfo {
     }
 
     /// C++ `BoyiaCompileInfo::compile` → `CompileCode(script, vm)`.
-    pub fn compile_string(&self, script: &str, vm: *mut LVoid) {
-        if vm.is_null() {
-            return;
-        }
+    pub fn compile_string(&self, script: &str, vm: &mut BoyiaVM) {
         let script_c = CString::new(script).unwrap_or_default();
         unsafe {
             compile_code(script_c.as_ptr() as *mut _, vm);
@@ -73,11 +70,7 @@ impl BoyiaCompileInfo {
     }
 
     /// C++ `BoyiaCompileInfo::compileFile`: skip if path seen, read file, `compile`, restore previous path/id.
-    pub fn compile_file(&mut self, path: &str, vm: *mut LVoid, id_creator: &mut IdCreator) {
-        if vm.is_null() {
-            return;
-        }
-
+    pub fn compile_file(&mut self, path: &str, vm: &mut BoyiaVM, id_creator: &mut IdCreator) {
         let dedup_key = std::fs::canonicalize(Path::new(path))
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| path.to_string());

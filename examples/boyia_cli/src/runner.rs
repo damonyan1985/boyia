@@ -51,12 +51,14 @@ impl BoyiaRunner {
             .as_ref()
             .unwrap()
             .post_task(move |runtime| {
-                let vm = runtime.vm();
-                let mut gen_id = |s: &str| runtime.id_creator().gen_ident_by_str(s);
+                let runtime = runtime.as_mut();
                 let runner_ptr = runner_ptr_usize as *mut BoyiaRunner;
-                builtin_https_class(vm, &mut gen_id, runner_ptr);
-                builtin_file_class(vm, &mut gen_id, runner_ptr);
-                builtin_zip_class(vm, &mut gen_id, runner_ptr);
+                let _ = runtime.with_vm_and_id_creator(|vm, id_creator| {
+                    let mut gen_id = |s: &str| id_creator.gen_ident_by_str(s);
+                    builtin_https_class(vm, &mut gen_id, runner_ptr);
+                    builtin_file_class(vm, &mut gen_id, runner_ptr);
+                    builtin_zip_class(vm, &mut gen_id, runner_ptr);
+                });
                 let _ = init_tx.send(());
             });
         let _ = init_rx.recv();

@@ -6,14 +6,12 @@
 use crate::gen_builtin_class_function;
 use std::ptr;
 
-use boyia_vm::{
-    copy_object, create_global_class, gen_identifier_from_str, get_boyia_class_id, get_local_size,
+use boyia_vm::{copy_object, create_global_class, gen_identifier_from_str, get_boyia_class_id, get_local_size,
     get_local_value, get_string_buffer, native_call_impl, set_native_result, value_copy, BuiltinId,
     BoyiaClass, BoyiaFunction, BoyiaStr, BoyiaValue, K_BOYIA_NULL, NativePtr, RealValue, ValueType,
-    LInt, LUintPtr, LVoid, OpHandleResult,
-};
+    LInt, LUintPtr, LVoid, OpHandleResult, BoyiaVM};
 
-unsafe fn map_put_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn map_put_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     let obj = get_local_value(size - 1, vm) as *mut BoyiaValue;
     let key_val = get_local_value(1, vm) as *const BoyiaValue;
@@ -31,7 +29,7 @@ unsafe fn map_put_impl(vm: *mut LVoid) -> OpHandleResult {
     OpHandleResult::kOpResultSuccess
 }
 
-/// Copy UTF-8 from `buf` into an owned `String` (null / `mLen <= 0` → empty; invalid UTF-8 lossy).
+/// Copy UTF-8 from `buf` into an owned `String` (null / `mLen <= 0` ? empty; invalid UTF-8 lossy).
 /// Rejects **`mLen > 0` with null `mPtr`** (corrupt [`BoyiaStr`]) so [`std::slice::from_raw_parts`] is not called on null.
 unsafe fn boyia_str_ptr_to_string(buf: *const BoyiaStr) -> String {
     if buf.is_null() {
@@ -64,7 +62,7 @@ unsafe fn boyia_str_to_string(v: *const BoyiaValue) -> String {
     boyia_str_ptr_to_string(buf)
 }
 
-unsafe fn map_get_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn map_get_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     let obj = get_local_value(size - 1, vm) as *const BoyiaValue;
     let key_val = get_local_value(1, vm) as *const BoyiaValue;
@@ -103,7 +101,7 @@ unsafe fn map_get_impl(vm: *mut LVoid) -> OpHandleResult {
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn map_remove_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn map_remove_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     let obj = get_local_value(size - 1, vm) as *mut BoyiaValue;
     let key_val = get_local_value(1, vm) as *const BoyiaValue;
@@ -134,7 +132,7 @@ unsafe fn map_remove_impl(vm: *mut LVoid) -> OpHandleResult {
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn map_clear_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn map_clear_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     let obj = get_local_value(size - 1, vm) as *mut BoyiaValue;
     let fun = (*obj).mValue.mObj.mPtr as *mut BoyiaFunction;
@@ -144,7 +142,7 @@ unsafe fn map_clear_impl(vm: *mut LVoid) -> OpHandleResult {
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn map_map_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn map_map_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     let cb = get_local_value(1, vm) as *const BoyiaValue;
     let obj = get_local_value(size - 1, vm) as *const BoyiaValue;
@@ -177,14 +175,11 @@ unsafe fn map_map_impl(vm: *mut LVoid) -> OpHandleResult {
 }
 
 /// Register Map builtin class: put, get, remove, clear, map.
-pub fn builtin_map_class<F>(vm: *mut LVoid, gen_id: &mut F)
+pub fn builtin_map_class<F>(vm: &mut BoyiaVM, gen_id: &mut F)
 where
     F: FnMut(&str) -> LUintPtr,
 {
     eprintln!("[builtin_map_class] 1");
-    if vm.is_null() {
-        return;
-    }
     let map_key = gen_id("Map");
     eprintln!("[builtin_map_class] 2 create_global_class");
     let class_ref = unsafe { create_global_class(map_key, vm) } as *mut BoyiaValue;
@@ -212,6 +207,6 @@ where
 }
 
 /// Create a Map instance. Match CreatMapObject.
-pub unsafe fn create_map_object(vm: *mut LVoid, map_class_key: LUintPtr) -> *mut LVoid {
+pub unsafe fn create_map_object(vm: &mut BoyiaVM, map_class_key: LUintPtr) -> *mut LVoid {
     copy_object(map_class_key, 32, vm)
 }

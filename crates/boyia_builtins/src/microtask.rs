@@ -4,13 +4,11 @@
 #![allow(non_snake_case)]
 
 use crate::{gen_builtin_class_function, gen_builtin_class_prop_function};
-use boyia_vm::{
-    copy_object, create_global_class, create_micro_task, get_local_size, get_local_value,
+use boyia_vm::{copy_object, create_global_class, create_micro_task, get_local_size, get_local_value,
     native_call_impl, resume_micro_task, BoyiaClass, BoyiaFunction, BoyiaValue, K_BOYIA_NULL,
-    NativePtr, RealValue, ValueType, LIntPtr, LUintPtr, LVoid, OpHandleResult,
-};
+    NativePtr, RealValue, ValueType, LIntPtr, LUintPtr, LVoid, OpHandleResult, BoyiaVM};
 
-unsafe fn micro_task_resolve_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn micro_task_resolve_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     println!("call micro_task_resolve_impl");
     let size = get_local_size(vm);
     let obj = get_local_value(size - 1, vm) as *const BoyiaValue;
@@ -24,7 +22,7 @@ unsafe fn micro_task_resolve_impl(vm: *mut LVoid) -> OpHandleResult {
     OpHandleResult::kOpResultSuccess
 }
 
-unsafe fn micro_task_init_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn micro_task_init_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     let obj = get_local_value(size - 1, vm) as *mut BoyiaValue;
     let worker = get_local_value(1, vm) as *const BoyiaValue;
@@ -59,14 +57,11 @@ unsafe fn micro_task_init_impl(vm: *mut LVoid) -> OpHandleResult {
 }
 
 /// Register MicroTask builtin class: task prop; init, resolve (prop).
-pub fn builtin_micro_task_class<F>(vm: *mut LVoid, gen_id: &mut F)
+pub fn builtin_micro_task_class<F>(vm: &mut BoyiaVM, gen_id: &mut F)
 where
     F: FnMut(&str) -> LUintPtr,
 {
     eprintln!("[builtin_micro_task_class] 1");
-    if vm.is_null() {
-        return;
-    }
     let micro_task_key = gen_id("MicroTask");
     eprintln!("[builtin_micro_task_class] 2 create_global_class");
     let class_ref = unsafe { create_global_class(micro_task_key, vm) } as *mut BoyiaValue;
@@ -96,6 +91,6 @@ where
 }
 
 /// Create a MicroTask instance. Match CreateMicroTaskObject.
-pub unsafe fn create_micro_task_object(vm: *mut LVoid, micro_task_class_key: LUintPtr) -> *mut LVoid {
+pub unsafe fn create_micro_task_object(vm: &mut BoyiaVM, micro_task_class_key: LUintPtr) -> *mut LVoid {
     copy_object(micro_task_class_key, 32, vm)
 }

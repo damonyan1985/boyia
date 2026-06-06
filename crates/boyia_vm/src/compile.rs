@@ -256,7 +256,7 @@ unsafe fn gen_identifier(cs: *mut CompileState) -> LUintPtr {
     if vm.is_null() {
         return hash_ident(token_name_slice(cs));
     }
-    let rt = get_runtime_from_vm(vm as *mut LVoid);
+    let rt = get_runtime_from_vm(&mut *vm);
     if rt.is_null() {
         return hash_ident(token_name_slice(cs));
     }
@@ -282,7 +282,7 @@ unsafe fn gen_identifier_object_key(cs: *mut CompileState) -> LUintPtr {
     if vm.is_null() {
         return hash_ident(slice);
     }
-    let rt = get_runtime_from_vm(vm as *mut LVoid);
+    let rt = get_runtime_from_vm(&mut *vm);
     if rt.is_null() {
         return hash_ident(slice);
     }
@@ -640,7 +640,7 @@ unsafe fn compile_var_operand(cs: *mut CompileState, key: LUintPtr) -> OpCommand
 // Expression chain (must be before statements that call eval_expression)
 // Resolve native by key via runtime dispatcher (see core::find_native_func).
 fn find_native_func(key: LUintPtr, vm: *mut BoyiaVM) -> LInt {
-    unsafe { crate::core::find_native_func(vm as *mut crate::types::LVoid, key) }
+    unsafe { crate::core::find_native_func(&mut *vm, key) }
 }
 
 /// PushArgStatement(needPushFunction, cs) per BoyiaCore.cpp: if needPushFunction { ++argCount; PutInstruction PushArg; NextToken; if RPTR Assign(argCount) return; Putback; } do { EvalExpression; PutInstruction PushArg; ++argCount; } while (COMMA); PutInstruction Assign(argCount).
@@ -1442,7 +1442,7 @@ unsafe fn parse_statement(cs: *mut CompileState) {
     }
     if !(*vm).mEState.is_null() {
         (*(*vm).mEState).mStackFrame.mContext = &mut (*cs).mCmds as *mut CommandTable;
-        crate::execute::execute_code(vm as *mut LVoid);
+        crate::execute::execute_code(&mut *vm);
     }
     if (*vm).mEState != es && !es.is_null() {
         crate::core::destroy_exec_state((*vm).mEState, vm);

@@ -9,10 +9,8 @@ use super::r#async::{
 };
 use crate::runner::BoyiaRunner;
 use boyia_builtins::gen_builtin_class_function;
-use boyia_vm::{
-    get_local_size, get_local_value, set_int_result, BoyiaValue, NativePtr, LUintPtr, LVoid,
-    OpHandleResult,
-};
+use boyia_vm::{get_local_size, get_local_value, set_int_result, BoyiaValue, NativePtr, LUintPtr, LVoid,
+    OpHandleResult, BoyiaVM};
 use std::fs::{self, File};
 use std::io::copy;
 use std::path::{Path, PathBuf};
@@ -23,7 +21,7 @@ use zip::ZipArchive;
 
 /// `Zip.compress` / `Zip.extract`: local **0** = callee, **1..** = args, last = class (`this`).
 /// No password: **5** locals `(callee, src, dest, callback, this)`. With password: **6** `(callee, src, dest, password, callback, this)`.
-pub fn builtin_zip_class<F>(vm: *mut LVoid, gen_id: &mut F, runner_ptr: *mut BoyiaRunner)
+pub fn builtin_zip_class<F>(vm: &mut BoyiaVM, gen_id: &mut F, runner_ptr: *mut BoyiaRunner)
 where
     F: FnMut(&str) -> LUintPtr,
 {
@@ -249,7 +247,7 @@ fn schedule_extract(
 }
 
 /// `Zip.compress(src, destZip, callback)` or `Zip.compress(src, destZip, password, callback)`.
-unsafe fn zip_compress_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn zip_compress_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     if size != 5 && size != 6 {
         return OpHandleResult::kOpResultEnd;
@@ -290,7 +288,7 @@ unsafe fn zip_compress_impl(vm: *mut LVoid) -> OpHandleResult {
 }
 
 /// `Zip.extract(srcZip, destDir, callback)` or `Zip.extract(srcZip, destDir, password, callback)`.
-unsafe fn zip_extract_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn zip_extract_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     println!("call zip_extract_impl");
     let size = get_local_size(vm);
     if size != 5 && size != 6 {

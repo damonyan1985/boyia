@@ -2,12 +2,11 @@
 
 use crate::runner::BoyiaRunner;
 use boyia_runtime::BoyiaRuntime;
-use boyia_vm::{
-    copy_object, create_global_class, create_native_string, create_string_object, gen_identifier_from_str,
-    get_function_count, native_call_impl, value_copy, vector_params_grow_if_full, set_native_result, BoyiaClass, BoyiaFunction,
+use boyia_vm::{copy_object, create_global_class, create_native_string, create_string_object, gen_identifier_from_str,
+    get_function_count, native_call_impl, value_copy, vector_params_grow_if_full, set_native_result, vm_from_void,
+    BoyiaClass, BoyiaFunction,
     BoyiaStr, BoyiaValue, BuiltinId, Global, K_BOYIA_NULL, RealValue, Runtime, ValueType, LInt, LInt8, LIntPtr,
-    LUintPtr, LVoid,
-};
+    LUintPtr, LVoid, BoyiaVM};
 use std::str;
 
 /// Slot in [BoyiaFunction::mParams] where `File` / `Https` / `Zip` store `BoyiaRunner*` as `BY_INT`.
@@ -66,18 +65,15 @@ pub unsafe fn runner_from_class(class_val: *const BoyiaValue) -> *mut BoyiaRunne
 
 /// Create global class `class_name`, set `mSuper`, [install_runner_param_slot], then `register(class_body, vm, gen_id)` for native methods.
 pub fn register_runner_builtin_class<F, R>(
-    vm: *mut LVoid,
+    vm: &mut BoyiaVM,
     gen_id: &mut F,
     runner_ptr: *mut BoyiaRunner,
     class_name: &str,
     mut register: R,
 ) where
     F: FnMut(&str) -> LUintPtr,
-    R: FnMut(*mut BoyiaFunction, *mut LVoid, &mut F),
+    R: FnMut(*mut BoyiaFunction, &mut BoyiaVM, &mut F),
 {
-    if vm.is_null() {
-        return;
-    }
     let class_key = gen_id(class_name);
     let class_ref = unsafe { create_global_class(class_key, vm) } as *mut BoyiaValue;
     if class_ref.is_null() {
@@ -159,7 +155,7 @@ pub fn value_to_string(value: *const BoyiaValue) -> Option<String> {
     str::from_utf8(slice).ok().map(ToOwned::to_owned)
 }
 
-pub unsafe fn make_callback_info(vm: *mut LVoid, callback_val: *const BoyiaValue) -> Option<CallbackInfo> {
+pub unsafe fn make_callback_info(vm: &mut BoyiaVM, callback_val: *const BoyiaValue) -> Option<CallbackInfo> {
     if callback_val.is_null() {
         return None;
     }
@@ -190,7 +186,7 @@ pub unsafe fn make_callback_info(vm: *mut LVoid, callback_val: *const BoyiaValue
     })
 }
 
-unsafe fn native_string_value(vm: *mut LVoid, s: &str) -> Option<BoyiaValue> {
+unsafe fn native_string_value(vm: &mut BoyiaVM, s: &str) -> Option<BoyiaValue> {
     if s.is_empty() {
         let body = create_string_object(std::ptr::null_mut(), 0, vm);
         if body.is_null() {
@@ -230,7 +226,7 @@ unsafe fn native_string_value(vm: *mut LVoid, s: &str) -> Option<BoyiaValue> {
     Some(value)
 }
 
-unsafe fn map_put_str_key(vm: *mut LVoid, map_obj: *mut BoyiaValue, key: &str, val: &BoyiaValue) -> bool {
+unsafe fn map_put_str_key(vm: &mut BoyiaVM, map_obj: *mut BoyiaValue, key: &str, val: &BoyiaValue) -> bool {
     let fun = (*map_obj).mValue.mObj.mPtr as *mut BoyiaFunction;
     if fun.is_null() || (*fun).mParams.is_null() {
         return false;
@@ -253,7 +249,7 @@ unsafe fn map_put_str_key(vm: *mut LVoid, map_obj: *mut BoyiaValue, key: &str, v
 }
 
 /// Build a Map `BoyiaValue` for script: `status`, and optionally `data` / `message` per rules above.
-pub unsafe fn build_async_result_map(vm: *mut LVoid, r: &AsyncBuiltinResult) -> Option<BoyiaValue> {
+pub unsafe fn build_async_result_map(vm: &mut BoyiaVM, r: &AsyncBuiltinResult) -> Option<BoyiaValue> {
     let raw = copy_object(BuiltinId::kBoyiaMap.as_key(), 32, vm);
     if raw.is_null() {
         return None;
@@ -309,7 +305,14 @@ pub unsafe fn callback_async_result(
     callback: CallbackInfo,
     runtime: &mut BoyiaRuntime,
 ) {
-    let vm = runtime.vm();
+    let vm_ptr = runtime.vm();
+    if vm_ptr.is_null() {
+        if !callback.object_global.is_null() {
+            runtime.remove_persistent(callback.object_global);
+        }
+        return;
+    }
+    let vm = vm_from_void(vm_ptr).expect("runtime VM");
     let Some(map_val) = build_async_result_map(vm, &result) else {
         if !callback.object_global.is_null() {
             runtime.remove_persistent(callback.object_global);
@@ -357,7 +360,7 @@ pub unsafe fn callback_async_result(
             },
         },
     };
-    native_call_impl(args.as_mut_ptr(), 2, &mut obj, vm);
+    native_call_impl(args.as_mut_ptr(), 2, &mut obj, vm_from_void(vm_ptr).expect("runtime VM"));
 
     if !callback.object_global.is_null() {
         runtime.remove_persistent(callback.object_global);

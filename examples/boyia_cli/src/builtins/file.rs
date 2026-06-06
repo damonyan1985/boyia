@@ -9,14 +9,12 @@ use super::r#async::{
 };
 use crate::runner::BoyiaRunner;
 use boyia_builtins::gen_builtin_class_function;
-use boyia_vm::{
-    get_local_size, get_local_value, set_int_result, BoyiaValue, NativePtr, LIntPtr, LUintPtr, LVoid,
-    OpHandleResult,
-};
+use boyia_vm::{get_local_size, get_local_value, set_int_result, BoyiaValue, NativePtr, LIntPtr, LUintPtr, LVoid,
+    OpHandleResult, BoyiaVM};
 use std::fs::{self, File};
 use std::io::ErrorKind;
 
-pub fn builtin_file_class<F>(vm: *mut LVoid, gen_id: &mut F, runner_ptr: *mut crate::runner::BoyiaRunner)
+pub fn builtin_file_class<F>(vm: &mut BoyiaVM, gen_id: &mut F, runner_ptr: *mut crate::runner::BoyiaRunner)
 where
     F: FnMut(&str) -> LUintPtr,
 {
@@ -166,7 +164,7 @@ fn schedule_delete(
 }
 
 /// `File.read(path, callback)` — callback Map: ok + `data` (file text), or fail + `message`.
-unsafe fn file_read_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn file_read_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     if size < 3 {
         return OpHandleResult::kOpResultEnd;
@@ -191,7 +189,7 @@ unsafe fn file_read_impl(vm: *mut LVoid) -> OpHandleResult {
 }
 
 /// `File.write(path, content, callback)` — callback gets a Map (`status`, optional `data` / `message`).
-unsafe fn file_write_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn file_write_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     if size < 4 {
         return OpHandleResult::kOpResultEnd;
@@ -220,7 +218,7 @@ unsafe fn file_write_impl(vm: *mut LVoid) -> OpHandleResult {
 }
 
 /// `File.createDirs(path, callback)` — callback Map: ok (no `data`), or fail + `message`.
-unsafe fn file_create_dirs_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn file_create_dirs_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     if size < 3 {
         return OpHandleResult::kOpResultEnd;
@@ -245,7 +243,7 @@ unsafe fn file_create_dirs_impl(vm: *mut LVoid) -> OpHandleResult {
 }
 
 /// `File.create(path, callback)` — creates or truncates an empty file (`std::fs::File::create`); parent directory must exist.
-unsafe fn file_create_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn file_create_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     if size < 3 {
         return OpHandleResult::kOpResultEnd;
@@ -270,7 +268,7 @@ unsafe fn file_create_impl(vm: *mut LVoid) -> OpHandleResult {
 }
 
 /// `File.delete(path, callback)` — removes a **file** only (`std::fs::remove_file`); callback Map like `write` / `createDirs`.
-unsafe fn file_delete_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn file_delete_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     if size < 3 {
         return OpHandleResult::kOpResultEnd;
@@ -295,7 +293,7 @@ unsafe fn file_delete_impl(vm: *mut LVoid) -> OpHandleResult {
 }
 
 /// `File.exists(path, callback)` — callback Map: ok + `data` is `"file"`, `"dir"`, or `"other"`; fail + `message` if path not found or on I/O error.
-unsafe fn file_exists_impl(vm: *mut LVoid) -> OpHandleResult {
+unsafe fn file_exists_impl(vm: &mut BoyiaVM) -> OpHandleResult {
     let size = get_local_size(vm);
     if size < 3 {
         return OpHandleResult::kOpResultEnd;
