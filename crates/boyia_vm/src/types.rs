@@ -954,7 +954,7 @@ pub struct BoyiaVM {
     pub(crate) mLoopStack: *mut LIntPtr,
     pub(crate) mLocals: *mut BoyiaValue,
     pub(crate) mExecStack: *mut StackFrame,
-    pub(crate) mCpu: *mut VMCpu,
+    pub(crate) mCpu: VMCpu,
     pub(crate) mESLink: *mut ExecState,
     pub(crate) mEState: *mut ExecState,
     pub(crate) mEStateCache: *mut LVoid,

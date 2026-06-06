@@ -88,25 +88,17 @@ pub unsafe fn set_native_result(result: *mut BoyiaValue, vm: &mut BoyiaVM) {
     if result.is_null() {
         return;
     }
-    if !(*vm).mCpu.is_null() {
-        value_copy(&mut (*(*vm).mCpu).mReg0, result);
-    }
+    value_copy(&mut vm.mCpu.mReg0, result);
 }
 
 /// Get native result (reg0).
 pub unsafe fn get_native_result(vm: &mut BoyiaVM) -> *mut BoyiaValue {
-    if (*vm).mCpu.is_null() {
-        return ptr::null_mut();
-    }
-    &mut (*(*vm).mCpu).mReg0
+    &mut vm.mCpu.mReg0
 }
 
 /// Get native helper result (reg1).
 pub unsafe fn get_native_helper_result(vm: &mut BoyiaVM) -> *mut BoyiaValue {
-    if (*vm).mCpu.is_null() {
-        return ptr::null_mut();
-    }
-    &mut (*(*vm).mCpu).mReg1
+    &mut vm.mCpu.mReg1
 }
 
 /// Get current scope local stack size.
@@ -423,13 +415,12 @@ enum InitVmStage {
 
 /// `completed` = last fully successful milestone. Frees in reverse order; always returns null.
 unsafe fn init_vm_abort(vm_ptr: *mut BoyiaVM, completed: InitVmStage) -> *mut LVoid {
-    if false /* vm is reference */ {
+    if vm_ptr.is_null() {
         return ptr::null_mut();
     }
     let vm = &mut *vm_ptr;
     let globals_layout = Layout::array::<BoyiaValue>(NUM_GLOBAL_VARS).unwrap();
     let fun_table_layout = Layout::array::<BoyiaFunction>(NUM_FUNC).unwrap();
-    let cpu_layout = Layout::new::<VMCpu>();
     let vm_layout = Layout::new::<BoyiaVM>();
     let task_queue_layout = Layout::new::<MicroTaskQueue>();
     let handlers_layout = Layout::array::<OPHandler>(65).unwrap();
@@ -450,10 +441,6 @@ unsafe fn init_vm_abort(vm_ptr: *mut BoyiaVM, completed: InitVmStage) -> *mut LV
     if completed >= InitVmStage::ExecStateCacheOk && !vm.mEStateCache.is_null() {
         destroy_memory_cache(vm.mEStateCache);
         vm.mEStateCache = ptr::null_mut();
-    }
-    if completed >= InitVmStage::CpuOk && !vm.mCpu.is_null() {
-        dealloc(vm.mCpu as *mut u8, cpu_layout);
-        vm.mCpu = ptr::null_mut();
     }
     if completed >= InitVmStage::FunTableOk && !vm.mFunTable.is_null() {
         dealloc(vm.mFunTable as *mut u8, fun_table_layout);
@@ -484,7 +471,7 @@ pub unsafe fn init_vm_boxed(creator: *mut dyn Runtime) -> Option<Box<BoyiaVM>> {
     eprintln!("[init_vm] 1 alloc BoyiaVM");
     let layout = Layout::new::<BoyiaVM>();
     let vm_ptr = alloc_zeroed(layout) as *mut BoyiaVM;
-    if false /* vm is reference */ {
+    if vm_ptr.is_null() {
         eprintln!("[init_vm] ERROR vm_ptr null");
         return None;
     }
@@ -514,21 +501,13 @@ pub unsafe fn init_vm_boxed(creator: *mut dyn Runtime) -> Option<Box<BoyiaVM>> {
         return None;
     }
 
-    eprintln!("[init_vm] 4 alloc Cpu");
-    let cpu_layout = Layout::new::<VMCpu>();
-    vm.mCpu = alloc_zeroed(cpu_layout) as *mut VMCpu;
-    if vm.mCpu.is_null() {
-        init_vm_abort(vm_ptr, InitVmStage::FunTableOk);
-        return None;
-    }
-    eprintln!("[init_vm] 4a cpu ptr ok");
-    let cpu = &mut *vm.mCpu;
-    cpu.mReg0 = BoyiaValue {
+    eprintln!("[init_vm] 4 init Cpu");
+    vm.mCpu.mReg0 = BoyiaValue {
         mNameKey: 0,
         mValueType: ValueType::BY_ARG,
         mValue: RealValue { mIntVal: 0 },
     };
-    cpu.mReg1 = BoyiaValue {
+    vm.mCpu.mReg1 = BoyiaValue {
         mNameKey: 0,
         mValueType: ValueType::BY_ARG,
         mValue: RealValue { mIntVal: 0 },
@@ -587,11 +566,6 @@ unsafe fn drop_vm_owned_resources(vm: &mut BoyiaVM) {
         let layout = Layout::array::<BoyiaFunction>(NUM_FUNC).unwrap();
         dealloc(vm.mFunTable as *mut u8, layout);
         vm.mFunTable = ptr::null_mut();
-    }
-    if !vm.mCpu.is_null() {
-        let layout = Layout::new::<VMCpu>();
-        dealloc(vm.mCpu as *mut u8, layout);
-        vm.mCpu = ptr::null_mut();
     }
     if !vm.mEStateCache.is_null() {
         destroy_memory_cache(vm.mEStateCache);
@@ -827,15 +801,14 @@ pub unsafe fn create_object(vm: &mut BoyiaVM) -> LInt {
         eprintln!("[create_object] -> kOpResultEnd (local 0 not BY_CLASS)");
         return OpHandleResult::kOpResultEnd as i32;
     }
-    let result = &mut (*(*vm).mCpu).mReg0;
-    value_copy(result, value);
+    value_copy(&mut vm.mCpu.mReg0, value);
     let new_func = copy_function(value, NUM_FUNC_PARAMS as LInt, vm);
     if new_func.is_null() {
         eprintln!("[create_object] -> kOpResultEnd (copy_function returned null)");
         return OpHandleResult::kOpResultEnd as i32;
     }
-    (*result).mValue.mObj.mPtr = new_func as LIntPtr;
-    (*result).mValue.mObj.mSuper = (*value).mValue.mObj.mSuper;
+    vm.mCpu.mReg0.mValue.mObj.mPtr = new_func as LIntPtr;
+    vm.mCpu.mReg0.mValue.mObj.mSuper = (*value).mValue.mObj.mSuper;
     eprintln!(
         "[create_object] -> kOpResultSuccess (instance ptr={:?}, class key={})",
         new_func, class_name_key
@@ -1558,16 +1531,12 @@ pub unsafe fn consume_micro_task(vm: &mut BoyiaVM) {
             (*aes).mWait = LFalse;
             (*aes).mStackFrame.mPC =
                 crate::execute::next_pc((*aes).mStackFrame.mPC, vm);
-            if !(*vm).mCpu.is_null() {
-                value_copy(&mut (*(*vm).mCpu).mReg0, &(*task).mResult);
-            }
+            value_copy(&mut (*vm).mCpu.mReg0, &(*task).mResult);
 
             crate::execute::exec_instruction(vm);
             if (*aes).mStackFrame.mContext.is_null() {
                 if !(*aes).mTopTask.is_null() {
-                    if !(*vm).mCpu.is_null() {
-                        value_copy(&mut (*(*aes).mTopTask).mResult, &(*(*vm).mCpu).mReg0);
-                    }
+                    value_copy(&mut (*(*aes).mTopTask).mResult, &(*vm).mCpu.mReg0);
 
                     add_micro_task((*aes).mTopTask, vm);
                 }
