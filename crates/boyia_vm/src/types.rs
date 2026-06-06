@@ -670,7 +670,8 @@ impl CommandTable {
 }
 
 pub(crate) struct StackFrame {
-    pub mPC: *mut Instruction,
+    /// Index into [VMCode]; [kInvalidInstruction] when idle.
+    pub mPC: LIntPtr,
     pub mLValSize: LInt,
     pub mLoopSize: LInt,
     pub mResultNum: LInt,

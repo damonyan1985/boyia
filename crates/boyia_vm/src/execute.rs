@@ -169,7 +169,7 @@ unsafe fn get_op_value(inst: *const Instruction, side: OpSide, vm: *mut BoyiaVM)
     }
 }
 
-/// Resolve a [VMCode] instruction index to a pointer (for [StackFrame.mPC] only).
+/// Resolve a [VMCode] instruction index to a pointer for dispatch.
 #[inline]
 pub(crate) unsafe fn instruction_ptr_at(vm: *mut BoyiaVM, idx: LIntPtr) -> *mut Instruction {
     if idx < 0 {
@@ -178,16 +178,40 @@ pub(crate) unsafe fn instruction_ptr_at(vm: *mut BoyiaVM, idx: LIntPtr) -> *mut 
     (*vm).mVMCode.instruction_at_offset(idx)
 }
 
-/// Next instruction by mNext offset; null if kInvalidInstruction. Used by core::consume_micro_task.
+#[inline]
+pub(crate) fn pc_is_valid(pc: LIntPtr) -> bool {
+    pc >= 0
+}
+
+/// Next instruction index via `mNext`; [kInvalidInstruction] at chain end.
+#[inline]
+pub(crate) unsafe fn next_pc(pc: LIntPtr, vm: *mut BoyiaVM) -> LIntPtr {
+    if pc < 0 || vm.is_null() {
+        return kInvalidInstruction;
+    }
+    let inst = instruction_ptr_at(vm, pc);
+    if inst.is_null() {
+        return kInvalidInstruction;
+    }
+    let next = (*inst).mNext;
+    if next == kInvalidInstruction {
+        kInvalidInstruction
+    } else {
+        next
+    }
+}
+
+/// Legacy alias: next instruction pointer from index (used where a pointer is still needed).
 #[inline]
 pub(crate) unsafe fn next_instruction(inst: *const Instruction, vm: *mut BoyiaVM) -> *mut Instruction {
     if inst.is_null() || vm.is_null() {
         return ptr::null_mut();
     }
-    if (*inst).mNext == kInvalidInstruction {
-        return ptr::null_mut();
+    if let Some(idx) = (*vm).mVMCode.ptr_to_index(inst) {
+        instruction_ptr_at(vm, next_pc(idx as LIntPtr, vm))
+    } else {
+        ptr::null_mut()
     }
-    (*vm).mVMCode.instruction_at_offset((*inst).mNext)
 }
 
 /// Reset scene of global execute state. Strict 1:1 match of ResetScene in BoyiaCore.cpp.
@@ -199,7 +223,7 @@ pub(crate) unsafe fn reset_scene(state: *mut ExecState) {
     (*state).mStackFrame.mLoopSize = 0;
     (*state).mStackFrame.mResultNum = 0;
     (*state).mStackFrame.mContext = ptr::null_mut();
-    (*state).mStackFrame.mPC = ptr::null_mut();
+    (*state).mStackFrame.mPC = kInvalidInstruction;
     (*state).mLast = ptr::null_mut();
     (*state).mTopTask = ptr::null_mut();
 
@@ -219,7 +243,7 @@ unsafe fn exec_pop_function(vm: *mut BoyiaVM) {
         return;
     }
     let e_state = (*vm).mEState;
-    if !(*e_state).mStackFrame.mPC.is_null() {
+    if pc_is_valid((*e_state).mStackFrame.mPC) {
         return;
     }
 
@@ -248,9 +272,9 @@ unsafe fn exec_pop_function(vm: *mut BoyiaVM) {
     if e_state.is_null() {
         return;
     }
-    if !(*e_state).mStackFrame.mPC.is_null() {
+    if pc_is_valid((*e_state).mStackFrame.mPC) {
         let pc = (*e_state).mStackFrame.mPC;
-        (*e_state).mStackFrame.mPC = next_instruction(pc, vm);
+        (*e_state).mStackFrame.mPC = next_pc(pc, vm);
         exec_pop_function(vm);
     } else if !(*e_state).mLast.is_null() && (*(*e_state).mLast).mWait == LFalse {
         exec_pop_function(vm);
@@ -546,9 +570,9 @@ pub(crate) unsafe fn handle_push_scene(inst: *const Instruction, vm: *mut BoyiaV
         (*e_state).mStackFrame.mLValSize - (*(*vm).mCpu).mReg1.mValue.mIntVal as LInt
     };
     (*frame).mPC = if inst.is_null() {
-        ptr::null_mut()
+        kInvalidInstruction
     } else {
-        inst.offset((*inst).mOPLeft.int_value() as isize) as *mut Instruction
+        (*e_state).mStackFrame.mPC + (*inst).mOPLeft.int_value()
     };
     (*frame).mContext = (*e_state).mStackFrame.mContext;
     (*frame).mResultNum = (*e_state).mStackFrame.mResultNum;
@@ -767,8 +791,7 @@ unsafe fn handle_jump_to_if_true(inst: *const Instruction, vm: *mut BoyiaVM) -> 
         return OpHandleResult::kOpResultEnd;
     }
     if (*value).mValue.mIntVal == 0 {
-        let offset = (*inst).mOPRight.int_value() as isize;
-        (*(*vm).mEState).mStackFrame.mPC = inst.offset(offset) as *mut Instruction;
+        (*(*vm).mEState).mStackFrame.mPC += (*inst).mOPRight.int_value();
     }
     OpHandleResult::kOpResultSuccess
 }
@@ -778,8 +801,7 @@ unsafe fn handle_once_jmp_true(inst: *mut Instruction, vm: *mut BoyiaVM) -> OpHa
         return OpHandleResult::kOpResultEnd;
     }
     if (*inst).mOPLeft.int_value() == 0 {
-        let offset = (*inst).mOPRight.int_value() as isize;
-        (*(*vm).mEState).mStackFrame.mPC = inst.offset(offset) as *mut Instruction;
+        (*(*vm).mEState).mStackFrame.mPC += (*inst).mOPRight.int_value();
     } else {
         (*inst).mOPLeft.set_int_value(LFalse as LIntPtr);
     }
@@ -794,17 +816,20 @@ unsafe fn handle_if_end(_inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandle
     }
     let e_state = (*vm).mEState;
     let mut pc = (*e_state).mStackFrame.mPC;
-    let mut tmp_inst = next_instruction(pc, vm);
-    while !tmp_inst.is_null()
-        && ((*tmp_inst).mOPCode == CmdType::kCmdElif || (*tmp_inst).mOPCode == CmdType::kCmdElse)
-    {
-        let off = (*tmp_inst).mOPRight.int_value() as isize;
-        pc = tmp_inst.offset(off);
-        tmp_inst = next_instruction(pc, vm);
+    let mut tmp_idx = next_pc(pc, vm);
+    while pc_is_valid(tmp_idx) {
+        let tmp_inst = instruction_ptr_at(vm, tmp_idx);
+        if tmp_inst.is_null() {
+            break;
+        }
+        if (*tmp_inst).mOPCode == CmdType::kCmdElif || (*tmp_inst).mOPCode == CmdType::kCmdElse {
+            pc = tmp_idx + (*tmp_inst).mOPRight.int_value();
+            tmp_idx = next_pc(pc, vm);
+        } else {
+            break;
+        }
     }
-    if !pc.is_null() {
-        (*e_state).mStackFrame.mPC = pc;
-    }
+    (*e_state).mStackFrame.mPC = pc;
     OpHandleResult::kOpResultSuccess
 }
 
@@ -812,8 +837,7 @@ unsafe fn handle_if_end(_inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandle
 /// mPC = inst - inst->mOPLeft.mValue; return kOpResultSuccess.
 unsafe fn handle_jump_to(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
     if (*inst).mOPLeft.mType == OpType::OP_CONST_NUMBER {
-        let offset = (*inst).mOPLeft.int_value() as isize;
-        (*(*vm).mEState).mStackFrame.mPC = inst.offset(-offset) as *mut Instruction;
+        (*(*vm).mEState).mStackFrame.mPC -= (*inst).mOPLeft.int_value();
     }
     OpHandleResult::kOpResultSuccess
 }
@@ -823,8 +847,8 @@ unsafe fn handle_jump_to(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandle
 unsafe fn handle_loop_begin(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
     let e_state = (*vm).mEState;
     let loop_size = (*e_state).mStackFrame.mLoopSize as usize;
-    let target = inst.offset((*inst).mOPLeft.int_value() as isize);
-    (*vm).mLoopStack.add(loop_size).write(target as LIntPtr);
+    let target = (*e_state).mStackFrame.mPC + (*inst).mOPLeft.int_value();
+    (*vm).mLoopStack.add(loop_size).write(target);
     (*e_state).mStackFrame.mLoopSize += 1;
     OpHandleResult::kOpResultSuccess
 }
@@ -834,14 +858,12 @@ unsafe fn handle_loop_begin(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHan
 unsafe fn handle_loop_if_true(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleResult {
     let value = &(*(*vm).mCpu).mReg0;
     if value.mValue.mIntVal == 0 {
-        (*(*vm).mEState).mStackFrame.mPC =
-            inst.offset((*inst).mOPRight.int_value() as isize) as *mut Instruction;
+        (*(*vm).mEState).mStackFrame.mPC += (*inst).mOPRight.int_value();
         (*(*vm).mEState).mStackFrame.mLoopSize -= 1;
         return OpHandleResult::kOpResultSuccess;
     }
     if (*inst).mOPLeft.int_value() != 0 {
-        (*(*vm).mEState).mStackFrame.mPC =
-            inst.offset((*inst).mOPLeft.int_value() as isize) as *mut Instruction;
+        (*(*vm).mEState).mStackFrame.mPC += (*inst).mOPLeft.int_value();
     }
     OpHandleResult::kOpResultSuccess
 }
@@ -854,9 +876,9 @@ unsafe fn handle_return(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleR
     }
     let ctx = (*e_state).mStackFrame.mContext;
     (*e_state).mStackFrame.mPC = if ctx.is_null() {
-        ptr::null_mut()
+        kInvalidInstruction
     } else {
-        instruction_ptr_at(vm, (*ctx).mEnd)
+        (*ctx).mEnd
     };
     OpHandleResult::kOpResultSuccess
 }
@@ -866,8 +888,7 @@ unsafe fn handle_break(_inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleR
     let e_state = (*vm).mEState;
     (*e_state).mStackFrame.mLoopSize -= 1;
     let idx = (*e_state).mStackFrame.mLoopSize as usize;
-    let target = (*vm).mLoopStack.add(idx).read() as *mut Instruction;
-    (*e_state).mStackFrame.mPC = target;
+    (*e_state).mStackFrame.mPC = (*vm).mLoopStack.add(idx).read();
     OpHandleResult::kOpResultSuccess
 }
 
@@ -1110,7 +1131,7 @@ unsafe fn handle_call_function(inst: *const Instruction, vm: *mut BoyiaVM) -> Op
     if value_type == ValueType::BY_NAV_FUNC || value_type == ValueType::BY_NAV_PROP {
         local_push(&mut (*e_state).mStackFrame.mClass, vm as *mut LVoid);
         let nav_fun = std::mem::transmute::<_, crate::types::NativePtr>((*func).mFuncBody);
-        (*e_state).mStackFrame.mPC = ptr::null_mut();
+        (*e_state).mStackFrame.mPC = kInvalidInstruction;
         return nav_fun(vm as *mut LVoid);
     }
 
@@ -1144,7 +1165,7 @@ unsafe fn handle_call_function(inst: *const Instruction, vm: *mut BoyiaVM) -> Op
 
     let e_state_new = (*vm).mEState;
     (*e_state_new).mStackFrame.mContext = cmds;
-    (*e_state_new).mStackFrame.mPC = instruction_ptr_at(vm, (*cmds).mBegin);
+    (*e_state_new).mStackFrame.mPC = (*cmds).mBegin;
     OpHandleResult::kOpResultJumpFun
 }
 
@@ -1495,7 +1516,7 @@ unsafe fn handle_await(inst: *const Instruction, vm: *mut BoyiaVM) -> OpHandleRe
     let last = (*e_state).mLast;
     if !last.is_null() && (*last).mWait == LFalse {
         switch_exec_state(last, vm);
-        (*(*vm).mEState).mStackFrame.mPC = ptr::null_mut();
+        (*(*vm).mEState).mStackFrame.mPC = kInvalidInstruction;
         return OpHandleResult::kOpResultSuccess;
     }
     OpHandleResult::kOpResultEnd
@@ -1541,25 +1562,26 @@ pub(crate) unsafe fn exec_instruction(vm: *mut BoyiaVM) {
     }
     let mut e_state = (*vm).mEState;
     eprintln!("[exec_instruction] pc={:?}", (*e_state).mStackFrame.mPC);
-    if (*e_state).mStackFrame.mPC.is_null() {
+    if !pc_is_valid((*e_state).mStackFrame.mPC) {
         exec_pop_function(vm);
         return;
     }
     eprintln!("[exec_instruction] dispatching first inst");
-    while !(*e_state).mStackFrame.mPC.is_null() {
+    while pc_is_valid((*e_state).mStackFrame.mPC) {
         let pc = (*e_state).mStackFrame.mPC;
-        let result = dispatch_instruction(pc, vm);
+        let inst = instruction_ptr_at(vm, pc);
+        let result = dispatch_instruction(inst, vm);
         e_state = (*vm).mEState;
         if result == OpHandleResult::kOpResultEnd {
             break;
         }
 
-        if !(*e_state).mStackFrame.mPC.is_null() && result == OpHandleResult::kOpResultJumpFun {
+        if pc_is_valid((*e_state).mStackFrame.mPC) && result == OpHandleResult::kOpResultJumpFun {
             continue;
         }
 
-        if !(*e_state).mStackFrame.mPC.is_null() {
-            (*e_state).mStackFrame.mPC = next_instruction((*e_state).mStackFrame.mPC, vm);
+        if pc_is_valid((*e_state).mStackFrame.mPC) {
+            (*e_state).mStackFrame.mPC = next_pc((*e_state).mStackFrame.mPC, vm);
         }
         exec_pop_function(vm);
         e_state = (*vm).mEState;
@@ -1606,7 +1628,7 @@ pub unsafe fn execute_code(vm: *mut LVoid) {
     }
     let begin = (*ctx).mBegin;
     eprintln!("[execute_code] mBegin={:?}", begin);
-    (*e_state).mStackFrame.mPC = instruction_ptr_at(vm, begin);
+    (*e_state).mStackFrame.mPC = begin;
     eprintln!("[execute_code] calling exec_instruction");
     exec_instruction(vm);
     reset_scene((*vm).mEState);

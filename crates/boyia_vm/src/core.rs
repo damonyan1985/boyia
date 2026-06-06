@@ -1019,8 +1019,7 @@ pub unsafe fn native_call_impl(
         crate::execute::assign_state_class((*vm_ptr).mEState, obj);
         let cmds = (*func).mFuncBody as *const CommandTable;
         (*(*vm_ptr).mEState).mStackFrame.mContext = cmds as *mut CommandTable;
-        (*(*vm_ptr).mEState).mStackFrame.mPC =
-            crate::execute::instruction_ptr_at(vm_ptr, (*cmds).mBegin);
+        (*(*vm_ptr).mEState).mStackFrame.mPC = (*cmds).mBegin;
         crate::execute::exec_instruction(vm_ptr);
     }
     destroy_exec_state(state, vm_ptr);
@@ -1616,11 +1615,12 @@ pub unsafe fn consume_micro_task(vm_ptr: *mut LVoid) {
     let mut task = (*queue).mUsedTasks.mHead;
     while !task.is_null() {
         let aes = (*task).mAsyncEs;
-        if !aes.is_null() && !(*aes).mStackFrame.mPC.is_null() {
+        if !aes.is_null() && crate::execute::pc_is_valid((*aes).mStackFrame.mPC) {
             let current_state = (*vm).mEState;
             switch_exec_state(aes, vm);
             (*aes).mWait = LFalse;
-            (*aes).mStackFrame.mPC = crate::execute::next_instruction((*aes).mStackFrame.mPC, vm);
+            (*aes).mStackFrame.mPC =
+                crate::execute::next_pc((*aes).mStackFrame.mPC, vm);
             if !(*vm).mCpu.is_null() {
                 value_copy(&mut (*(*vm).mCpu).mReg0, &(*task).mResult);
             }
