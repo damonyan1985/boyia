@@ -38,12 +38,12 @@ pub enum OpSide {
 /// Find the value of a variable. Strictly matches GetVal in BoyiaCore.cpp.
 /// Order: (1) obj scope (this/super per BuiltinId), (2) local variables, (3) global vars, (4) FindObjProp on mClass.
 #[inline]
-unsafe fn get_val(key: LUintPtr, vm: *mut BoyiaVM) -> *mut BoyiaValue {
+unsafe fn get_val(key: LUintPtr, vm: &mut BoyiaVM) -> *mut BoyiaValue {
     println!("[get_val] key={}", key);
-    if vm.is_null() || (*vm).mEState.is_null() {
+    if vm.mEState.is_null() {
         return ptr::null_mut();
     }
-    let e = (*vm).mEState;
+    let e = vm.mEState;
 
     /* First, see if has obj scope (BuiltinId: kBoyiaThis=1, kBoyiaSuper=2) */
     if key == BuiltinId::kBoyiaThis.as_key() {
@@ -84,8 +84,8 @@ unsafe fn get_val(key: LUintPtr, vm: *mut BoyiaVM) -> *mut BoyiaValue {
 
 /// `mLocals[start + frame_offset]` for current frame; `start` is previous frame's mLValSize. Offset 0 is callee function slot (not used for OP_LOCAL loads). Params start at offset 1.
 #[inline]
-unsafe fn get_local_ptr_by_frame_offset(vm: *mut BoyiaVM, frame_offset: LIntPtr) -> *mut BoyiaValue {
-    let e = (*vm).mEState;
+unsafe fn get_local_ptr_by_frame_offset(vm: &mut BoyiaVM, frame_offset: LIntPtr) -> *mut BoyiaValue {
+    let e = vm.mEState;
     if e.is_null() || (*e).mFrameIndex <= 0 {
         return ptr::null_mut();
     }
@@ -103,11 +103,8 @@ unsafe fn get_local_ptr_by_frame_offset(vm: *mut BoyiaVM, frame_offset: LIntPtr)
 }
 
 #[inline]
-unsafe fn get_capture_ptr(vm: *mut BoyiaVM, capture_idx: LIntPtr) -> *mut BoyiaValue {
-    if vm.is_null() {
-        return ptr::null_mut();
-    }
-    let val = get_local_value(0, &mut *vm) as *mut BoyiaValue;
+unsafe fn get_capture_ptr(vm: &mut BoyiaVM, capture_idx: LIntPtr) -> *mut BoyiaValue {
+    let val = get_local_value(0, vm) as *mut BoyiaValue;
     if val.is_null() {
         return ptr::null_mut();
     }
@@ -124,11 +121,11 @@ unsafe fn get_capture_ptr(vm: *mut BoyiaVM, capture_idx: LIntPtr) -> *mut BoyiaV
     (*fun).mParams.add(base + capture_idx as usize)
 }
 
-unsafe fn find_local_by_name_key_in_current_frame(vm: *mut BoyiaVM, key: LUintPtr) -> *mut BoyiaValue {
-    if vm.is_null() || (*vm).mEState.is_null() {
+unsafe fn find_local_by_name_key_in_current_frame(vm: &mut BoyiaVM, key: LUintPtr) -> *mut BoyiaValue {
+    if vm.mEState.is_null() {
         return ptr::null_mut();
     }
-    let e = (*vm).mEState;
+    let e = vm.mEState;
     if (*e).mFrameIndex <= 0 {
         return ptr::null_mut();
     }
@@ -151,8 +148,8 @@ unsafe fn find_local_by_name_key_in_current_frame(vm: *mut BoyiaVM, key: LUintPt
 
 /// Get pointer to BoyiaValue for REG0, REG1, VAR, or LOCAL operand. Returns null for constant operands.
 #[inline]
-unsafe fn get_op_value(inst: *const Instruction, side: OpSide, vm: *mut BoyiaVM) -> *mut BoyiaValue {
-    if inst.is_null() || vm.is_null()  {
+unsafe fn get_op_value(inst: *const Instruction, side: OpSide, vm: &mut BoyiaVM) -> *mut BoyiaValue {
+    if inst.is_null() {
         return ptr::null_mut();
     }
     let op = match side {
@@ -160,8 +157,8 @@ unsafe fn get_op_value(inst: *const Instruction, side: OpSide, vm: *mut BoyiaVM)
         OpSide::OpRight => &(*inst).mOPRight,
     };
     match op.mType {
-        OpType::OP_REG0 => &mut (*vm).mCpu.mReg0 as *mut BoyiaValue,
-        OpType::OP_REG1 => &mut (*vm).mCpu.mReg1 as *mut BoyiaValue,
+        OpType::OP_REG0 => &mut vm.mCpu.mReg0 as *mut BoyiaValue,
+        OpType::OP_REG1 => &mut vm.mCpu.mReg1 as *mut BoyiaValue,
         // OpType::OP_VAR => get_val(op.mValue as LUintPtr, vm),
         // OpType::OP_LOCAL => get_local_ptr_by_frame_offset(vm, op.mValue),
         OpType::OP_CAPTURE => get_capture_ptr(vm, op.int_value()),
@@ -171,11 +168,11 @@ unsafe fn get_op_value(inst: *const Instruction, side: OpSide, vm: *mut BoyiaVM)
 
 /// Resolve a [VMCode] instruction index to a pointer for dispatch.
 #[inline]
-pub(crate) unsafe fn instruction_ptr_at(vm: *mut BoyiaVM, idx: LIntPtr) -> *mut Instruction {
+pub(crate) unsafe fn instruction_ptr_at(vm: &mut BoyiaVM, idx: LIntPtr) -> *mut Instruction {
     if idx < 0 {
         return ptr::null_mut();
     }
-    (*vm).mVMCode.instruction_at_offset(idx)
+    vm.mVMCode.instruction_at_offset(idx)
 }
 
 #[inline]
@@ -185,8 +182,8 @@ pub(crate) fn pc_is_valid(pc: LIntPtr) -> bool {
 
 /// Next instruction index via `mNext`; [kInvalidInstruction] at chain end.
 #[inline]
-pub(crate) unsafe fn next_pc(pc: LIntPtr, vm: *mut BoyiaVM) -> LIntPtr {
-    if pc < 0 || vm.is_null() {
+pub(crate) unsafe fn next_pc(pc: LIntPtr, vm: &mut BoyiaVM) -> LIntPtr {
+    if pc < 0 {
         return kInvalidInstruction;
     }
     let inst = instruction_ptr_at(vm, pc);
@@ -203,12 +200,13 @@ pub(crate) unsafe fn next_pc(pc: LIntPtr, vm: *mut BoyiaVM) -> LIntPtr {
 
 /// Legacy alias: next instruction pointer from index (used where a pointer is still needed).
 #[inline]
-pub(crate) unsafe fn next_instruction(inst: *const Instruction, vm: *mut BoyiaVM) -> *mut Instruction {
-    if inst.is_null() || vm.is_null() {
+pub(crate) unsafe fn next_instruction(inst: *const Instruction, vm: &mut BoyiaVM) -> *mut Instruction {
+    if inst.is_null() {
         return ptr::null_mut();
     }
-    if let Some(idx) = (*vm).mVMCode.ptr_to_index(inst) {
-        instruction_ptr_at(vm, next_pc(idx as LIntPtr, vm))
+    if let Some(idx) = vm.mVMCode.ptr_to_index(inst) {
+        let next = next_pc(idx as LIntPtr, vm);
+        instruction_ptr_at(vm, next)
     } else {
         ptr::null_mut()
     }
@@ -238,11 +236,11 @@ pub(crate) unsafe fn reset_scene(state: *mut ExecState) {
 }
 
 /// ExecPopFunction: strictly matches BoyiaCore.cpp. if mPC then return; if mFrameIndex<=0 && mLast && !mLast->mWait then SwitchExecState(mLast), maybe DestroyExecState; if mFrameIndex>0 then HandlePopScene(kBoyiaNull, vm), then if mPC then mPC=NextInstruction, ExecPopFunction else if mLast&&!mLast->mWait then ExecPopFunction.
-unsafe fn exec_pop_function(vm: *mut BoyiaVM) {
-    if vm.is_null() || (*vm).mEState.is_null() {
+unsafe fn exec_pop_function(vm: &mut BoyiaVM) {
+    if vm.mEState.is_null() {
         return;
     }
-    let e_state = (*vm).mEState;
+    let e_state = vm.mEState;
     if pc_is_valid((*e_state).mStackFrame.mPC) {
         return;
     }
@@ -263,12 +261,12 @@ unsafe fn exec_pop_function(vm: *mut BoyiaVM) {
     }
 
     // SwitchExecState后mFrameIndex可能不为0
-    let e_state = (*vm).mEState;
+    let e_state = vm.mEState;
     if e_state.is_null() || (*e_state).mFrameIndex <= 0 {
         return;
     }
-    let _ = handle_pop_scene(None, &mut *vm);
-    let e_state = (*vm).mEState;
+    let _ = handle_pop_scene(None, vm);
+    let e_state = vm.mEState;
     if e_state.is_null() {
         return;
     }
@@ -907,7 +905,7 @@ unsafe fn find_obj_prop(
     lval: *const BoyiaValue,
     rval: LUintPtr,
     inst: *mut crate::types::Instruction,
-    _vm: *mut BoyiaVM,
+    _vm: &mut BoyiaVM,
 ) -> *mut BoyiaValue {
     if lval.is_null() || (*lval).mValueType != ValueType::BY_CLASS {
         return ptr::null_mut();
@@ -1048,9 +1046,9 @@ unsafe fn handle_push_params(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHand
 }
 
 /// HandleCallAsyncFunction per BoyiaCore.cpp: create exec state, switch, push scene, copy params, AssignStateClass.
-unsafe fn handle_call_async_function(vm: *mut BoyiaVM) {
+unsafe fn handle_call_async_function(vm: &mut BoyiaVM) {
     println!("call handle_call_async_function0");
-    let current = (*vm).mEState;
+    let current = vm.mEState;
     if current.is_null() || (*current).mFrameIndex <= 0 {
         return;
     }
@@ -1075,7 +1073,7 @@ unsafe fn handle_call_async_function(vm: *mut BoyiaVM) {
     println!("call handle_call_async_function2");
     (*state).mLast = current;
     switch_exec_state(state, vm);
-    let _ = handle_push_scene(None, &mut *vm);
+    let _ = handle_push_scene(None, vm);
     let func = (*value).mValue.mObj.mPtr as *const BoyiaFunction;
     let param_size = (*func).mParamSize as usize;
 
@@ -1100,7 +1098,7 @@ unsafe fn handle_call_async_function(vm: *mut BoyiaVM) {
     };
 
     println!("call handle_call_async_function3");
-    assign_state_class((*vm).mEState, &val as *const BoyiaValue);
+    assign_state_class(vm.mEState, &val as *const BoyiaValue);
 }
 
 /// HandleCallFunction per BoyiaCore.cpp: localstack first value is function ptr; BY_NAV_FUNC/BY_NAV_PROP => LocalPush + navFun, return; BY_PROP_FUNC/BY_ANONYM_FUNC => AssignStateClass; BY_ASYNC_PROP => HandleCallAsyncFunction; BY_ASYNC => no-op; then set cmds/PC and return kOpResultJumpFun.
@@ -1555,12 +1553,12 @@ unsafe fn handle_cmd_end(_inst: &mut Instruction, _vm: &mut BoyiaVM) -> OpHandle
 // ---------- Main loop ----------
 
 /// Execute instructions until PC is null or handler returns kOpResultEnd. Internal only; use execute_code / execute_global_code.
-pub(crate) unsafe fn exec_instruction(vm: *mut BoyiaVM) {
+pub(crate) unsafe fn exec_instruction(vm: &mut BoyiaVM) {
     eprintln!("[exec_instruction] enter");
-    if vm.is_null() || (*vm).mEState.is_null() {
+    if vm.mEState.is_null() {
         return;
     }
-    let mut e_state = (*vm).mEState;
+    let mut e_state = vm.mEState;
     eprintln!("[exec_instruction] pc={:?}", (*e_state).mStackFrame.mPC);
     if !pc_is_valid((*e_state).mStackFrame.mPC) {
         exec_pop_function(vm);
@@ -1573,8 +1571,8 @@ pub(crate) unsafe fn exec_instruction(vm: *mut BoyiaVM) {
         if inst_ptr.is_null() {
             break;
         }
-        let result = dispatch_instruction(&mut *inst_ptr, &mut *vm);
-        e_state = (*vm).mEState;
+        let result = dispatch_instruction(&mut *inst_ptr, vm);
+        e_state = vm.mEState;
         if result == OpHandleResult::kOpResultEnd {
             break;
         }
@@ -1587,7 +1585,7 @@ pub(crate) unsafe fn exec_instruction(vm: *mut BoyiaVM) {
             (*e_state).mStackFrame.mPC = next_pc((*e_state).mStackFrame.mPC, vm);
         }
         exec_pop_function(vm);
-        e_state = (*vm).mEState;
+        e_state = vm.mEState;
     }
 }
 
@@ -1627,6 +1625,6 @@ pub unsafe fn execute_code(vm: &mut BoyiaVM) {
     eprintln!("[execute_code] mBegin={:?}", begin);
     (*e_state).mStackFrame.mPC = begin;
     eprintln!("[execute_code] calling exec_instruction");
-    exec_instruction(vm as *mut BoyiaVM);
+    exec_instruction(vm);
     reset_scene(vm.mEState);
 }

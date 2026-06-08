@@ -403,7 +403,7 @@ pub unsafe fn gc_collect_garbage(gc: *mut BoyiaGc, vm: *mut LVoid) {
     let mut stack_addr: LIntPtr = 0;
     let mut op_stack_addr: LIntPtr = 0;
     let mut op_size: LInt = 0;
-    let mut ptr = vm;
+    let mut state = ptr::null_mut();
     loop {
         let next = get_local_stack(
             &mut stack_addr,
@@ -411,28 +411,28 @@ pub unsafe fn gc_collect_garbage(gc: *mut BoyiaGc, vm: *mut LVoid) {
             &mut op_stack_addr,
             &mut op_size,
             vm_mut(vm),
-            ptr,
+            state,
         );
         mark_value_table(stack_addr as *mut BoyiaValue, size);
         mark_value_table(op_stack_addr as *mut BoyiaValue, op_size);
         if next.is_null() {
             break;
         }
-        ptr = next;
+        state = next;
     }
 
     let mut result = ptr::null_mut::<BoyiaValue>();
     let mut obj = ptr::null_mut::<BoyiaValue>();
-    ptr = vm;
+    let mut task = ptr::null_mut();
     loop {
-        ptr = iterate_micro_task(&mut obj, &mut result, vm_mut(vm), ptr);
+        task = iterate_micro_task(&mut obj, &mut result, vm_mut(vm), task);
         if !result.is_null() {
             mark_value(result);
         }
         if !obj.is_null() {
             mark_value(obj);
         }
-        if ptr.is_null() {
+        if task.is_null() {
             break;
         }
     }
@@ -626,7 +626,7 @@ pub(crate) unsafe fn compact_memory(gc: *mut BoyiaGc) {
     let mut stack_addr: LIntPtr = 0;
     let mut op_stack_addr: LIntPtr = 0;
     let mut op_size: LInt = 0;
-    let mut ptr = vm;
+    let mut state = ptr::null_mut();
     loop {
         let next = get_local_stack(
             &mut stack_addr,
@@ -634,7 +634,7 @@ pub(crate) unsafe fn compact_memory(gc: *mut BoyiaGc) {
             &mut op_stack_addr,
             &mut op_size,
             vm_mut(vm),
-            ptr,
+            state,
         );
         migrate_value_table(
             stack_addr as *mut BoyiaValue,
@@ -655,7 +655,7 @@ pub(crate) unsafe fn compact_memory(gc: *mut BoyiaGc) {
         if next.is_null() {
             break;
         }
-        ptr = next;
+        state = next;
     }
     (*rt).update_runtime_memory(to_pool, vm);
     reset_gc_ref(gc);

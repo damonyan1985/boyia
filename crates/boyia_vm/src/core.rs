@@ -198,25 +198,20 @@ pub unsafe fn local_push(value: *mut BoyiaValue, vm: &mut BoyiaVM) {
     (*e_state).mStackFrame.mLValSize += 1;
 }
 
-/// Get local stack and optional op stack; returns previous state pointer.
+/// Get local stack and optional op stack for one exec-state frame.
+/// `state == null` starts from `vm.mESLink`; otherwise `state` points at the current [ExecState].
 pub unsafe fn get_local_stack(
     stack: *mut LIntPtr,
     size: *mut LInt,
     op_stack: *mut LIntPtr,
     op_size: *mut LInt,
     vm: &mut BoyiaVM,
-    ptr: *mut LVoid,
+    state: *mut LVoid,
 ) -> *mut LVoid {
-    if ptr.is_null() {
-        if !size.is_null() {
-            *size = 0;
-        }
-        return ptr::null_mut();
-    }
-    let state = if vm_as_void(vm) == ptr {
-        (*vm).mESLink
+    let state = if state.is_null() {
+        vm.mESLink
     } else {
-        ptr as *mut ExecState
+        state as *mut ExecState
     };
     if state.is_null() {
         if !size.is_null() {
@@ -294,19 +289,19 @@ unsafe fn create_micro_task_cache() -> *mut LVoid {
 }
 
 #[inline]
-unsafe fn alloc_exec_state(vm: *mut BoyiaVM) -> *mut ExecState {
-    if vm.is_null() || (*vm).mEStateCache.is_null() {
+unsafe fn alloc_exec_state(vm: &mut BoyiaVM) -> *mut ExecState {
+    if vm.mEStateCache.is_null() {
         return ptr::null_mut();
     }
-    alloc_memory_chunk((*vm).mEStateCache) as *mut ExecState
+    alloc_memory_chunk(vm.mEStateCache) as *mut ExecState
 }
 
 #[inline]
-unsafe fn free_exec_state(state: *mut ExecState, vm: *mut BoyiaVM) {
-    if state.is_null() || vm.is_null() || (*vm).mEStateCache.is_null() {
+unsafe fn free_exec_state(state: *mut ExecState, vm: &mut BoyiaVM) {
+    if state.is_null() || vm.mEStateCache.is_null() {
         return;
     }
-    free_memory_chunk(state as *mut LVoid, (*vm).mEStateCache);
+    free_memory_chunk(state as *mut LVoid, vm.mEStateCache);
 }
 
 /// Extra slots when an Array-style `mParams` buffer is full. Match `addElementToVector` in BoyiaLib.cpp.
@@ -325,7 +320,7 @@ pub unsafe fn vector_params_grow_if_full(fun: *mut BoyiaFunction, vm: &mut Boyia
     if (*fun).mParamSize < cap {
         return true;
     }
-    let creator = (*vm).mCreator;
+    let creator = vm.mCreator;
     if creator.is_null() {
         return false;
     }
@@ -516,12 +511,12 @@ pub unsafe fn init_vm_boxed(creator: *mut dyn Runtime) -> Option<Box<BoyiaVM>> {
         init_vm_abort(vm_ptr, InitVmStage::CpuOk);
         return None;
     }
-    vm.mEState = create_exec_state(vm_ptr);
+    vm.mEState = create_exec_state(vm);
     if vm.mEState.is_null() {
         init_vm_abort(vm_ptr, InitVmStage::ExecStateCacheOk);
         return None;
     }
-    switch_exec_state(vm.mEState, vm_ptr);
+    switch_exec_state(vm.mEState, vm);
 
     eprintln!("[init_vm] 9 alloc TaskQueue");
     let task_queue_layout = Layout::new::<MicroTaskQueue>();
@@ -629,14 +624,14 @@ pub unsafe fn load_entry_table(buffer: *mut LVoid, size: LInt, vm: &mut BoyiaVM)
 // Helpers: find_global, init_function, create_fun_val, copy_function
 // ---------------------------------------------------------------------------
 
-pub(crate) unsafe fn find_global(key: LUintPtr, vm: *mut BoyiaVM) -> *mut BoyiaValue {
+pub(crate) unsafe fn find_global(key: LUintPtr, vm: &mut BoyiaVM) -> *mut BoyiaValue {
     println!("[find_global] key={}", key);
-    if vm.is_null() || (*vm).mGlobals.is_null() {
+    if vm.mGlobals.is_null() {
         return ptr::null_mut();
     }
-    for i in 0..(*vm).mGValSize as usize {
-        if (*vm).mGlobals.add(i).read().mNameKey == key {
-            return (*vm).mGlobals.add(i);
+    for i in 0..vm.mGValSize as usize {
+        if vm.mGlobals.add(i).read().mNameKey == key {
+            return vm.mGlobals.add(i);
         }
     }
 
@@ -648,7 +643,7 @@ fn is_object_prop_func(type_: ValueType) -> bool {
     type_ == ValueType::BY_PROP_FUNC || type_ == ValueType::BY_ASYNC_PROP || type_ == ValueType::BY_NAV_PROP || type_ == ValueType::BY_ANONYM_FUNC
 }
 
-pub(crate) unsafe fn init_function(fun: *mut BoyiaFunction, vm: *mut BoyiaVM) {
+pub(crate) unsafe fn init_function(fun: *mut BoyiaFunction, vm: &mut BoyiaVM) {
     eprintln!("[init_function] fun={:?}", fun);
     if fun.is_null() {
         eprintln!("[init_function] null arg");
@@ -656,7 +651,7 @@ pub(crate) unsafe fn init_function(fun: *mut BoyiaFunction, vm: *mut BoyiaVM) {
     }
     (*fun).mParamSize = 0;
     (*fun).mCaptureCount = 0;
-    let creator = (*vm).mCreator;
+    let creator = vm.mCreator;
     if creator.is_null() {
         eprintln!("[init_function] ERROR mCreator null");
         return;
@@ -669,23 +664,23 @@ pub(crate) unsafe fn init_function(fun: *mut BoyiaFunction, vm: *mut BoyiaVM) {
         return;
     }
     (*fun).mParamCount = NUM_FUNC_PARAMS as LInt;
-    (*vm).mFunSize += 1;
-    eprintln!("[init_function] done mFunSize={}", (*vm).mFunSize);
+    vm.mFunSize += 1;
+    eprintln!("[init_function] done mFunSize={}", vm.mFunSize);
 }
 
-pub(crate) unsafe fn create_fun_val(hash_key: LUintPtr, type_: ValueType, vm: *mut BoyiaVM) -> *mut BoyiaValue {
-    eprintln!("[create_fun_val] key={} type={} mGValSize={} mFunSize={}", hash_key, type_ as u8, (*vm).mGValSize, (*vm).mFunSize);
-    if vm.is_null() || (*vm).mGlobals.is_null() || (*vm).mFunTable.is_null() {
+pub(crate) unsafe fn create_fun_val(hash_key: LUintPtr, type_: ValueType, vm: &mut BoyiaVM) -> *mut BoyiaValue {
+    eprintln!("[create_fun_val] key={} type={} mGValSize={} mFunSize={}", hash_key, type_ as u8, vm.mGValSize, vm.mFunSize);
+    if vm.mGlobals.is_null() || vm.mFunTable.is_null() {
         eprintln!("[create_fun_val] null vm/globals/fun_table");
         return ptr::null_mut();
     }
-    if (*vm).mGValSize as usize >= NUM_GLOBAL_VARS || (*vm).mFunSize as usize >= NUM_FUNC {
+    if vm.mGValSize as usize >= NUM_GLOBAL_VARS || vm.mFunSize as usize >= NUM_FUNC {
         eprintln!("[create_fun_val] capacity full");
         return ptr::null_mut();
     }
-    let val = (*vm).mGlobals.add((*vm).mGValSize as usize);
-    (*vm).mGValSize += 1;
-    let fun = (*vm).mFunTable.add((*vm).mFunSize as usize);
+    let val = vm.mGlobals.add(vm.mGValSize as usize);
+    vm.mGValSize += 1;
+    let fun = vm.mFunTable.add(vm.mFunSize as usize);
     eprintln!("[create_fun_val] val={:?} fun={:?} type={:?} hash_key={:?}", val, fun, type_ as u8, hash_key);
     (*val).mValueType = type_;
     (*val).mNameKey = hash_key;
@@ -763,7 +758,7 @@ pub unsafe fn compile_code(code: *mut LInt8, vm: &mut BoyiaVM) {
     if code.is_null() {
         return;
     }
-    crate::compile::parse_and_register(code, vm as *mut BoyiaVM);
+    crate::compile::parse_and_register(code, vm);
 }
 
 /// Create object from local 0 class; set reg0.
@@ -837,7 +832,7 @@ pub unsafe fn copy_object(hash_key: LUintPtr, size: LInt, vm: &mut BoyiaVM) -> *
     if size <= 0 {
         return ptr::null_mut();
     }
-    let global = find_global(hash_key, vm as *mut BoyiaVM);
+    let global = find_global(hash_key, vm);
     if global.is_null() {
         return ptr::null_mut();
     }
@@ -872,21 +867,18 @@ pub unsafe fn get_boyia_class_id(obj: *const BoyiaValue) -> LUintPtr {
 }
 
 /// Create and link a new ExecState for callback invocation. Match CreateExecState in BoyiaCore.cpp.
-pub(crate) unsafe fn create_exec_state(vm: *mut BoyiaVM) -> *mut ExecState {
-    if vm.is_null() {
-        return ptr::null_mut();
-    }
+pub(crate) unsafe fn create_exec_state(vm: &mut BoyiaVM) -> *mut ExecState {
     let state = alloc_exec_state(vm);
     if state.is_null() {
         return ptr::null_mut();
     }
     crate::execute::reset_scene(state);
     (*state).mNext = ptr::null_mut();
-    (*state).mPrev = (*vm).mESLink;
-    if !(*vm).mESLink.is_null() {
-        (*(*vm).mESLink).mNext = state;
+    (*state).mPrev = vm.mESLink;
+    if !vm.mESLink.is_null() {
+        (*vm.mESLink).mNext = state;
     }
-    (*vm).mESLink = state;
+    vm.mESLink = state;
     state
 }
 
@@ -904,11 +896,11 @@ pub unsafe fn native_call_impl(
     // 第一个参数为调用该函数的函数指针
     let value = args.add(0);
     eprintln!("[native_call_impl] HandlePushParams functionName={}", (*value).mValueType as u8);
-    let state = create_exec_state(vm as *mut BoyiaVM);
+    let state = create_exec_state(vm);
     if state.is_null() {
         return OpHandleResult::kOpResultEnd;
     }
-    switch_exec_state(state, vm as *mut BoyiaVM);
+    switch_exec_state(state, vm);
     let _ = crate::execute::handle_push_scene(None, vm);
     let start = (*state).mExecStack.as_ptr().add((*state).mFrameIndex as usize - 1).read().mLValSize;
     for idx in 0..argc {
@@ -928,10 +920,10 @@ pub unsafe fn native_call_impl(
         let cmds = (*func).mFuncBody as *const CommandTable;
         (*(*vm).mEState).mStackFrame.mContext = cmds as *mut CommandTable;
         (*(*vm).mEState).mStackFrame.mPC = (*cmds).mBegin;
-        crate::execute::exec_instruction(vm as *mut BoyiaVM);
+        crate::execute::exec_instruction(vm);
     }
-    destroy_exec_state(state, vm as *mut BoyiaVM);
-    switch_exec_state(current, vm as *mut BoyiaVM);
+    destroy_exec_state(state, vm);
+    switch_exec_state(current, vm);
     OpHandleResult::kOpResultSuccess
 }
 
@@ -979,7 +971,7 @@ pub unsafe fn name_for_identifier(vm: &mut BoyiaVM, id: LUintPtr) -> Option<Stri
 /// Create global class value.
 pub unsafe fn create_global_class(key: LUintPtr, vm: &mut BoyiaVM) -> *mut LVoid {
     eprintln!("[create_global_class] key={}", key);
-    let val = create_fun_val(key, ValueType::BY_CLASS, vm as *mut BoyiaVM) as *mut LVoid;
+    let val = create_fun_val(key, ValueType::BY_CLASS, vm) as *mut LVoid;
     eprintln!("[create_global_class] done val={:?}", val);
     val
 }
@@ -1004,8 +996,8 @@ pub unsafe fn alloc_builtin_function(vm: &mut BoyiaVM, native_ptr: NativePtr) ->
         eprintln!("[alloc_builtin_function] mFunSize full {}", (*vm).mFunSize);
         return ptr::null_mut();
     }
-    let fun = (*vm).mFunTable.add((*vm).mFunSize as usize);
-    (*vm).mFunSize += 1;
+    let fun = vm.mFunTable.add(vm.mFunSize as usize);
+    vm.mFunSize += 1;
     // slot already zeroed from init_vm alloc_zeroed(mFunTable)
     (*fun).mFuncBody = native_ptr as LIntPtr;
     (*fun).mParams = ptr::null_mut();
@@ -1154,12 +1146,12 @@ const K_STRING_BUFFER_SHIFT: LInt = 18;
 const MAX_INT_STR_LEN: LInt = 24;
 
 /// Fetch string from a value: BY_INT / BY_REAL -> pool buffer via [runtime_new_data_zeroed] (caller must [Runtime::delete_data] after use); string object -> borrows [GetStringBuffer]. Match FetchString in BoyiaValue.cpp.
-pub(crate) unsafe fn fetch_string(str_out: *mut BoyiaStr, value: *const BoyiaValue, vm: *mut BoyiaVM) {
+pub(crate) unsafe fn fetch_string(str_out: *mut BoyiaStr, value: *const BoyiaValue, vm: &mut BoyiaVM) {
     if str_out.is_null() || value.is_null() {
         return;
     }
     if (*value).mValueType == ValueType::BY_INT {
-        let creator = (*vm).mCreator;
+        let creator = vm.mCreator;
         let buf = runtime_new_data_zeroed(creator, MAX_INT_STR_LEN) as *mut LInt8;
         if buf.is_null() {
             (*str_out).mPtr = ptr::null_mut();
@@ -1175,7 +1167,7 @@ pub(crate) unsafe fn fetch_string(str_out: *mut BoyiaStr, value: *const BoyiaVal
         (*str_out).mPtr = buf;
         (*str_out).mLen = len as LInt;
     } else if (*value).mValueType == ValueType::BY_REAL {
-        let creator = (*vm).mCreator;
+        let creator = vm.mCreator;
         let buf = runtime_new_data_zeroed(creator, MAX_INT_STR_LEN) as *mut LInt8;
         if buf.is_null() {
             (*str_out).mPtr = ptr::null_mut();
@@ -1203,7 +1195,7 @@ pub(crate) unsafe fn fetch_string(str_out: *mut BoyiaStr, value: *const BoyiaVal
 }
 
 /// Release temp buffer from [`fetch_string`] when `source` was `BY_INT` or `BY_REAL` (pool alloc). String/object views must not be freed here.
-unsafe fn release_fetch_string_temp(s: BoyiaStr, source: *const BoyiaValue, vm: *mut BoyiaVM) {
+unsafe fn release_fetch_string_temp(s: BoyiaStr, source: *const BoyiaValue, vm: &mut BoyiaVM) {
     if source.is_null() {
         return;
     }
@@ -1214,7 +1206,7 @@ unsafe fn release_fetch_string_temp(s: BoyiaStr, source: *const BoyiaValue, vm: 
     if s.mPtr.is_null() {
         return;
     }
-    let creator = (*vm).mCreator;
+    let creator = vm.mCreator;
     if creator.is_null() {
         return;
     }
@@ -1222,7 +1214,7 @@ unsafe fn release_fetch_string_temp(s: BoyiaStr, source: *const BoyiaValue, vm: 
 }
 
 /// String concatenation: left + right, result stored in right (R0). Match StringAdd in BoyiaValue.cpp.
-pub(crate) unsafe fn string_add(left: *const BoyiaValue, right: *mut BoyiaValue, vm: *mut BoyiaVM) {
+pub(crate) unsafe fn string_add(left: *const BoyiaValue, right: *mut BoyiaValue, vm: &mut BoyiaVM) {
     if left.is_null() || right.is_null() {
         return;
     }
@@ -1242,7 +1234,7 @@ pub(crate) unsafe fn string_add(left: *const BoyiaValue, right: *mut BoyiaValue,
         release_fetch_string_temp(right_str, right, vm);
         return;
     }
-    let creator = (*vm).mCreator;
+    let creator = vm.mCreator;
     let concat = runtime_new_data_zeroed(creator, len as LInt) as *mut LInt8;
     if concat.is_null() {
         release_fetch_string_temp(left_str, left, vm);
@@ -1258,7 +1250,7 @@ pub(crate) unsafe fn string_add(left: *const BoyiaValue, right: *mut BoyiaValue,
     release_fetch_string_temp(left_str, left, vm);
     release_fetch_string_temp(right_str, right, vm);
 
-    let obj_body = create_string_object(concat, len, &mut *vm);
+    let obj_body = create_string_object(concat, len, vm);
     if obj_body.is_null() {
         if !creator.is_null() {
             (*creator).delete_data(concat as *mut LVoid);
@@ -1335,11 +1327,11 @@ pub unsafe fn create_native_string(value: *mut BoyiaValue, buffer: *mut LInt8, l
 // MicroTask helpers (internal)
 // ---------------------------------------------------------------------------
 
-unsafe fn add_micro_task(task: *mut MicroTask, vm: *mut BoyiaVM) {
+unsafe fn add_micro_task(task: *mut MicroTask, vm: &mut BoyiaVM) {
     if task.is_null() {
         return;
     }
-    let queue = (*vm).mTaskQueue;
+    let queue = vm.mTaskQueue;
     if queue.is_null() {
         return;
     }
@@ -1371,11 +1363,11 @@ unsafe fn alloc_micro_task_list_append(list: *mut MicroTaskList, task: *mut Micr
 }
 
 /// Free a micro task (return to alloc list / dealloc). Used by exec_pop_function and consume_micro_task.
-pub(crate) unsafe fn free_micro_task(task: *mut MicroTask, vm: *mut BoyiaVM) {
+pub(crate) unsafe fn free_micro_task(task: *mut MicroTask, vm: &mut BoyiaVM) {
     if task.is_null() {
         return;
     }
-    let queue = (*vm).mTaskQueue;
+    let queue = vm.mTaskQueue;
     if queue.is_null() {
         return;
     }
@@ -1399,8 +1391,8 @@ pub(crate) unsafe fn free_micro_task(task: *mut MicroTask, vm: *mut BoyiaVM) {
 }
 
 /// Match `AllocMicroTask` in BoyiaCore.cpp (`ALLOC_CHUNK(MicroTask, queue->mTaskCache)`).
-pub(crate) unsafe fn alloc_micro_task(vm: *mut BoyiaVM) -> *mut MicroTask {
-    let queue = (*vm).mTaskQueue;
+pub(crate) unsafe fn alloc_micro_task(vm: &mut BoyiaVM) -> *mut MicroTask {
+    let queue = vm.mTaskQueue;
     if queue.is_null() || (*queue).mTaskCache.is_null() {
         return ptr::null_mut();
     }
@@ -1422,10 +1414,6 @@ pub(crate) unsafe fn alloc_micro_task(vm: *mut BoyiaVM) -> *mut MicroTask {
 
 /// Create micro task; value copied to mObjRef.
 pub unsafe fn create_micro_task(vm: &mut BoyiaVM, value: *mut BoyiaValue) -> *mut LVoid {
-    if false /* vm is reference */ {
-        return ptr::null_mut();
-    }
-    let vm = vm as *mut BoyiaVM;
     let task = alloc_micro_task(vm);
     if task.is_null() {
         return ptr::null_mut();
@@ -1452,24 +1440,24 @@ pub unsafe fn resume_micro_task(
     }
 
     println!("call resume_micro_task");
-    add_micro_task(task, vm as *mut BoyiaVM);
+    add_micro_task(task, vm);
 }
 
 /// Switch current exec state to the given one; updates vm's mEState, mLocals, mOpStack, mLoopStack, mExecStack.
-pub(crate) unsafe fn switch_exec_state(exec_state: *mut ExecState, vm: *mut BoyiaVM) {
-    if exec_state.is_null() || vm.is_null() {
+pub(crate) unsafe fn switch_exec_state(exec_state: *mut ExecState, vm: &mut BoyiaVM) {
+    if exec_state.is_null() {
         return;
     }
-    (*vm).mEState = exec_state;
-    (*vm).mLocals = (*exec_state).mLocals.as_mut_ptr();
-    (*vm).mOpStack = (*exec_state).mOpStack.as_mut_ptr();
-    (*vm).mLoopStack = (*exec_state).mLoopStack.as_mut_ptr();
-    (*vm).mExecStack = (*exec_state).mExecStack.as_mut_ptr();
+    vm.mEState = exec_state;
+    vm.mLocals = (*exec_state).mLocals.as_mut_ptr();
+    vm.mOpStack = (*exec_state).mOpStack.as_mut_ptr();
+    vm.mLoopStack = (*exec_state).mLoopStack.as_mut_ptr();
+    vm.mExecStack = (*exec_state).mExecStack.as_mut_ptr();
 }
 
 /// Unlink exec state from ESLink list and free it. If state had mTopTask, caller must free it first.
-pub(crate) unsafe fn destroy_exec_state(state: *mut ExecState, vm: *mut BoyiaVM) {
-    if state.is_null() || vm.is_null() {
+pub(crate) unsafe fn destroy_exec_state(state: *mut ExecState, vm: &mut BoyiaVM) {
+    if state.is_null() {
         return;
     }
     let next = (*state).mNext;
@@ -1483,7 +1471,7 @@ pub(crate) unsafe fn destroy_exec_state(state: *mut ExecState, vm: *mut BoyiaVM)
         if !prev.is_null() {
             (*prev).mNext = ptr::null_mut();
         }
-        (*vm).mESLink = prev;
+        vm.mESLink = prev;
     }
     (*state).mTopTask = ptr::null_mut();
     (*state).mLast = ptr::null_mut();
@@ -1496,11 +1484,7 @@ pub(crate) unsafe fn destroy_exec_state(state: *mut ExecState, vm: *mut BoyiaVM)
 /// copy Reg0 to mTopTask->mResult and AddMicroTask(mTopTask), then DestroyExecState(aes) when mLast->mWait;
 /// switch back; unlink task and FreeMicroTask.
 pub unsafe fn consume_micro_task(vm: &mut BoyiaVM) {
-    if false /* vm is reference */ {
-        return;
-    }
-    let vm = vm as *mut BoyiaVM;
-    let queue_ptr = (*vm).mTaskQueue;
+    let queue_ptr = vm.mTaskQueue;
     if queue_ptr.is_null() {
         return;
     }
@@ -1509,17 +1493,17 @@ pub unsafe fn consume_micro_task(vm: &mut BoyiaVM) {
     while !task.is_null() {
         let aes = (*task).mAsyncEs;
         if !aes.is_null() && crate::execute::pc_is_valid((*aes).mStackFrame.mPC) {
-            let current_state = (*vm).mEState;
+            let current_state = vm.mEState;
             switch_exec_state(aes, vm);
             (*aes).mWait = LFalse;
             (*aes).mStackFrame.mPC =
                 crate::execute::next_pc((*aes).mStackFrame.mPC, vm);
-            value_copy(&mut (*vm).mCpu.mReg0, &(*task).mResult);
+            value_copy(&mut vm.mCpu.mReg0, &(*task).mResult);
 
             crate::execute::exec_instruction(vm);
             if (*aes).mStackFrame.mContext.is_null() {
                 if !(*aes).mTopTask.is_null() {
-                    value_copy(&mut (*(*aes).mTopTask).mResult, &(*vm).mCpu.mReg0);
+                    value_copy(&mut (*(*aes).mTopTask).mResult, &vm.mCpu.mReg0);
 
                     add_micro_task((*aes).mTopTask, vm);
                 }
@@ -1536,12 +1520,13 @@ pub unsafe fn consume_micro_task(vm: &mut BoyiaVM) {
     }
 }
 
-/// Iterate micro tasks (alloc list); ptr == vm_ptr to start.
+/// Iterate micro tasks (alloc list).
+/// `task == null` starts from the queue head; otherwise `task` points at the current [MicroTask].
 pub unsafe fn iterate_micro_task(
     obj: *mut *mut BoyiaValue,
     result: *mut *mut BoyiaValue,
     vm: &mut BoyiaVM,
-    ptr: *mut LVoid,
+    task: *mut LVoid,
 ) -> *mut LVoid {
     if !result.is_null() {
         *result = ptr::null_mut();
@@ -1549,18 +1534,14 @@ pub unsafe fn iterate_micro_task(
     if !obj.is_null() {
         *obj = ptr::null_mut();
     }
-    if ptr.is_null() {
-        return ptr::null_mut();
-    }
-    let vm_raw = vm as *mut BoyiaVM;
-    let queue = (*vm_raw).mTaskQueue;
+    let queue = vm.mTaskQueue;
     if queue.is_null() {
         return ptr::null_mut();
     }
-    let task = if vm_as_void(vm) == ptr {
+    let task = if task.is_null() {
         (*queue).mAllocTasks.mHead
     } else {
-        ptr as *mut MicroTask
+        task as *mut MicroTask
     };
     if task.is_null() {
         return task as *mut LVoid;

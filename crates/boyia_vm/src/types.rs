@@ -965,12 +965,6 @@ pub struct BoyiaVM {
     pub(crate) mCreator: *mut dyn Runtime,
 }
 
-/// Cast VM reference to legacy void pointer (GC / memory pool boundaries).
-#[inline]
-pub fn vm_as_void(vm: &mut BoyiaVM) -> *mut LVoid {
-    vm as *mut BoyiaVM as *mut LVoid
-}
-
 /// Recover VM reference from legacy void pointer. Returns `None` if null.
 #[inline]
 pub unsafe fn vm_from_void(vm: *mut LVoid) -> Option<&'static mut BoyiaVM> {
