@@ -120,22 +120,17 @@ unsafe fn skip_comment(cs: &mut CompileState) {
 }
 
 /// Allocate one instruction in vm->mVMCode; returns index or None if full.
-unsafe fn allocate_instruction(vm: &mut BoyiaVM) -> Option<usize> {
-    let vmcode = &mut vm.mVMCode;
-    let (index, inst) = vmcode.push_instruction()?;
-    (*inst).mOPCode = CmdType::kCmdNone;
-    (*inst).mOPLeft.mType = OpType::OP_NONE;
-    (*inst).mOPLeft.set_int_value(0);
-    (*inst).mOPRight.mType = OpType::OP_NONE;
-    (*inst).mOPRight.set_int_value(0);
-    (*inst).mNext = kInvalidInstruction;
-    (*inst).mCache = ptr::null_mut();
+fn allocate_instruction(vm: &mut BoyiaVM) -> Option<usize> {
+    let index = vm.mVMCode.push_instruction()?;
+    let inst = vm.mVMCode.instruction_mut(index)?;
+    inst.mOPCode = CmdType::kCmdNone;
+    inst.mOPLeft.mType = OpType::OP_NONE;
+    inst.mOPLeft.set_int_value(0);
+    inst.mOPRight.mType = OpType::OP_NONE;
+    inst.mOPRight.set_int_value(0);
+    inst.mNext = kInvalidInstruction;
+    inst.mCache = ptr::null_mut();
     Some(index)
-}
-
-/// Get pointer to instruction at index.
-unsafe fn get_instruction_mut(vm: &mut BoyiaVM, index: usize) -> *mut Instruction {
-    vm.mVMCode.instruction_ptr(index)
 }
 
 /// SetCodePosition(codeIndex, row, column, vm) in BoyiaValue.cpp: records debug position. No-op when no debugger.
@@ -153,33 +148,32 @@ unsafe fn put_instruction(
     op: CmdType,
 ) -> Option<usize> {
     let idx = allocate_instruction(cs.mVm)?;
-    let new_ins = get_instruction_mut(cs.mVm, idx);
+    let new_ins = cs.mVm.mVMCode.instruction_mut(idx)?;
 
     // Init member (match C++ newIns->mOPLeft = *left; newIns->mOPRight = *right when not none)
-    (*new_ins).mOPLeft.mType = OpType::OP_NONE;
-    (*new_ins).mOPLeft.set_int_value(0);
-    (*new_ins).mOPRight.mType = OpType::OP_NONE;
-    (*new_ins).mOPRight.set_int_value(0);
+    new_ins.mOPLeft.mType = OpType::OP_NONE;
+    new_ins.mOPLeft.set_int_value(0);
+    new_ins.mOPRight.mType = OpType::OP_NONE;
+    new_ins.mOPRight.set_int_value(0);
 
     if left.mType != OpType::OP_NONE {
-        (*new_ins).mOPLeft = left;
+        new_ins.mOPLeft = left;
     }
     if right.mType != OpType::OP_NONE {
-        (*new_ins).mOPRight = right;
+        new_ins.mOPRight = right;
     }
 
-    (*new_ins).mOPCode = op;
-    (*new_ins).mNext = kInvalidInstruction;
-    (*new_ins).mCache = ptr::null_mut();
+    new_ins.mOPCode = op;
+    new_ins.mNext = kInvalidInstruction;
+    new_ins.mCache = ptr::null_mut();
 
     // CommandTable* cmds = cs->mCmds; link chain by instruction index.
     let cmds = &mut cs.mCmds;
     let end_idx = cmds.mEnd;
     if end_idx < 0 {
         cmds.mBegin = idx as LIntPtr;
-    } else {
-        let prev = get_instruction_mut(cs.mVm, end_idx as usize);
-        (*prev).mNext = idx as LIntPtr;
+    } else if let Some(prev) = cs.mVm.mVMCode.instruction_mut(end_idx as usize) {
+        prev.mNext = idx as LIntPtr;
     }
     cmds.mEnd = idx as LIntPtr;
 
@@ -188,17 +182,16 @@ unsafe fn put_instruction(
 }
 
 /// Patch instruction at index: set left or right to (OP_CONST_NUMBER, offset).
-unsafe fn patch_offset(vm: &mut BoyiaVM, index: usize, is_right: bool, offset: LIntPtr) {
-    let inst = get_instruction_mut(vm, index);
-    if inst.is_null() {
+fn patch_offset(vm: &mut BoyiaVM, index: usize, is_right: bool, offset: LIntPtr) {
+    let Some(inst) = vm.mVMCode.instruction_mut(index) else {
         return;
-    }
+    };
     if is_right {
-        (*inst).mOPRight.mType = OpType::OP_CONST_NUMBER;
-        (*inst).mOPRight.set_int_value(offset);
+        inst.mOPRight.mType = OpType::OP_CONST_NUMBER;
+        inst.mOPRight.set_int_value(offset);
     } else {
-        (*inst).mOPLeft.mType = OpType::OP_CONST_NUMBER;
-        (*inst).mOPLeft.set_int_value(offset);
+        inst.mOPLeft.mType = OpType::OP_CONST_NUMBER;
+        inst.mOPLeft.set_int_value(offset);
     }
 }
 
@@ -1436,11 +1429,10 @@ unsafe fn dump_compiled_opcodes(cs: &mut CompileState) {
     let mut n_call_native = 0usize;
     let mut n_after_last_call_native = 0usize;
     while pc_idx >= 0 {
-        let inst = get_instruction_mut(cs.mVm, pc_idx as usize);
-        if inst.is_null() {
+        let Some(inst) = cs.mVm.mVMCode.instruction_at_offset(pc_idx) else {
             break;
-        }
-        let op = (*inst).mOPCode;
+        };
+        let op = inst.mOPCode;
         if op == CmdType::kCmdCallNative {
             n_call_native += 1;
             n_after_last_call_native = 0;
@@ -1449,7 +1441,7 @@ unsafe fn dump_compiled_opcodes(cs: &mut CompileState) {
         }
         eprintln!("  [{}] {:?}", n, op);
         n += 1;
-        let next_idx = (*inst).mNext;
+        let next_idx = inst.mNext;
         if next_idx == kInvalidInstruction {
             break;
         }

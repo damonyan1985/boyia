@@ -709,45 +709,34 @@ impl VMCode {
         self.mCode.is_empty()
     }
 
-    /// Pointer to the first instruction (legacy `mCode` base).
+    /// Mutable reference to instruction at `index`.
     #[inline]
-    pub fn base_ptr(&self) -> *mut Instruction {
-        if self.mCode.is_empty() {
-            std::ptr::null_mut()
-        } else {
-            self.mCode.as_ptr() as *mut Instruction
-        }
+    pub fn instruction_mut(&mut self, index: usize) -> Option<&mut Instruction> {
+        self.mCode.get_mut(index)
     }
 
-    /// Mutable pointer to instruction at `index`; null if out of range.
+    /// Shared reference to instruction at `index`.
     #[inline]
-    pub fn instruction_ptr(&mut self, index: usize) -> *mut Instruction {
-        self.mCode
-            .get_mut(index)
-            .map(|inst| inst as *mut Instruction)
-            .unwrap_or(std::ptr::null_mut())
+    pub fn instruction_at(&self, index: usize) -> Option<&Instruction> {
+        self.mCode.get(index)
     }
 
-    /// Instruction pointer by index offset (matches `mNext` / compile-time indices).
+    /// Mutable reference by compile/execute index ([LIntPtr] offset into [VMCode]).
     #[inline]
-    pub fn instruction_at_offset(&mut self, offset: LIntPtr) -> *mut Instruction {
+    pub fn instruction_at_offset_mut(&mut self, offset: LIntPtr) -> Option<&mut Instruction> {
         if offset < 0 {
-            return std::ptr::null_mut();
+            return None;
         }
-        self.instruction_ptr(offset as usize)
+        self.instruction_mut(offset as usize)
     }
 
-    /// Convert instruction pointer back to index in this buffer.
-    pub fn ptr_to_index(&self, inst: *const Instruction) -> Option<usize> {
-        if inst.is_null() || self.mCode.is_empty() {
+    /// Shared reference by compile/execute index.
+    #[inline]
+    pub fn instruction_at_offset(&self, offset: LIntPtr) -> Option<&Instruction> {
+        if offset < 0 {
             return None;
         }
-        let base = self.mCode.as_ptr();
-        let end = unsafe { base.add(self.mCode.len()) };
-        if inst < base || inst >= end {
-            return None;
-        }
-        Some((inst as usize - base as usize) / std::mem::size_of::<Instruction>())
+        self.instruction_at(offset as usize)
     }
 
     fn placeholder_instruction() -> Instruction {
@@ -760,14 +749,14 @@ impl VMCode {
         }
     }
 
-    /// Append one placeholder instruction; returns `(index, pointer)` or None when full.
-    pub fn push_instruction(&mut self) -> Option<(usize, *mut Instruction)> {
+    /// Append one placeholder instruction; returns its index or None when full.
+    pub fn push_instruction(&mut self) -> Option<usize> {
         if self.mCode.len() >= CODE_CAPACITY {
             return None;
         }
         let index = self.mCode.len();
         self.mCode.push(Self::placeholder_instruction());
-        Some((index, self.instruction_ptr(index)))
+        Some(index)
     }
 
     /// Replace all instructions from a raw buffer (used by `load_instructions`).

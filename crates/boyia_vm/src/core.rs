@@ -808,21 +808,23 @@ pub unsafe fn cache_vm_code(vm: &mut BoyiaVM) {
     }
     let size = vmcode.len();
     for i in 0..size {
-        let inst = vmcode.instruction_ptr(i);
-        if !(*inst).mCache.is_null() {
+        let Some(inst) = vmcode.instruction_mut(i) else {
+            continue;
+        };
+        if !inst.mCache.is_null() {
             let layout = Layout::new::<InlineCache>();
-            dealloc((*inst).mCache as *mut u8, layout);
-            (*inst).mCache = ptr::null_mut();
+            dealloc(inst.mCache as *mut u8, layout);
+            inst.mCache = ptr::null_mut();
         }
-        if (*inst).mOPCode == CmdType::kCmdCreateFunction
-            && (*inst).mOPRight.int_value() as u8 == ValueType::BY_ANONYM_FUNC as u8
+        if inst.mOPCode == CmdType::kCmdCreateFunction
+            && inst.mOPRight.int_value() as u8 == ValueType::BY_ANONYM_FUNC as u8
         {
-            (*inst).mOPLeft.mType = OpType::OP_NONE;
-            (*inst).mOPLeft.set_int_value(0);
+            inst.mOPLeft.mType = OpType::OP_NONE;
+            inst.mOPLeft.set_int_value(0);
         }
-        if (*inst).mOPCode == CmdType::kCmdOnceJmpTrue {
-            (*inst).mOPLeft.mType = OpType::OP_CONST_NUMBER;
-            (*inst).mOPLeft.set_int_value(LTrue as LIntPtr);
+        if inst.mOPCode == CmdType::kCmdOnceJmpTrue {
+            inst.mOPLeft.mType = OpType::OP_CONST_NUMBER;
+            inst.mOPLeft.set_int_value(LTrue as LIntPtr);
         }
     }
 }

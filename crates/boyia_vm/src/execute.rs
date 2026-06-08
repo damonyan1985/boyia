@@ -77,7 +77,7 @@ unsafe fn get_val(key: LUintPtr, vm: &mut BoyiaVM) -> *mut BoyiaValue {
     find_obj_prop(
         &(*e).mStackFrame.mClass as *const BoyiaValue,
         key,
-        ptr::null_mut(),
+        None,
         vm,
     )
 }
@@ -148,13 +148,10 @@ unsafe fn find_local_by_name_key_in_current_frame(vm: &mut BoyiaVM, key: LUintPt
 
 /// Get pointer to BoyiaValue for REG0, REG1, VAR, or LOCAL operand. Returns null for constant operands.
 #[inline]
-unsafe fn get_op_value(inst: *const Instruction, side: OpSide, vm: &mut BoyiaVM) -> *mut BoyiaValue {
-    if inst.is_null() {
-        return ptr::null_mut();
-    }
+unsafe fn get_op_value(inst: &Instruction, side: OpSide, vm: &mut BoyiaVM) -> *mut BoyiaValue {
     let op = match side {
-        OpSide::OpLeft => &(*inst).mOPLeft,
-        OpSide::OpRight => &(*inst).mOPRight,
+        OpSide::OpLeft => &inst.mOPLeft,
+        OpSide::OpRight => &inst.mOPRight,
     };
     match op.mType {
         OpType::OP_REG0 => &mut vm.mCpu.mReg0 as *mut BoyiaValue,
@@ -166,50 +163,31 @@ unsafe fn get_op_value(inst: *const Instruction, side: OpSide, vm: &mut BoyiaVM)
     }
 }
 
-/// Resolve a [VMCode] instruction index to a pointer for dispatch.
+/// Next instruction index via `mNext`; [kInvalidInstruction] at chain end.
 #[inline]
-pub(crate) unsafe fn instruction_ptr_at(vm: &mut BoyiaVM, idx: LIntPtr) -> *mut Instruction {
-    if idx < 0 {
-        return ptr::null_mut();
+pub(crate) fn next_pc(pc: LIntPtr, vm: &BoyiaVM) -> LIntPtr {
+    if pc < 0 {
+        return kInvalidInstruction;
     }
-    vm.mVMCode.instruction_at_offset(idx)
+    match vm.mVMCode.instruction_at_offset(pc) {
+        Some(inst) if inst.mNext != kInvalidInstruction => inst.mNext,
+        _ => kInvalidInstruction,
+    }
+}
+
+/// Dispatch the instruction at `pc`. Uses a raw reborrow so handlers can take `&mut Instruction` and `&mut BoyiaVM` together.
+#[inline]
+unsafe fn dispatch_instruction_at(pc: LIntPtr, vm: &mut BoyiaVM) -> OpHandleResult {
+    let inst = match vm.mVMCode.instruction_at_offset_mut(pc) {
+        Some(inst) => inst as *mut Instruction,
+        None => return OpHandleResult::kOpResultEnd,
+    };
+    dispatch_instruction(&mut *inst, vm)
 }
 
 #[inline]
 pub(crate) fn pc_is_valid(pc: LIntPtr) -> bool {
     pc >= 0
-}
-
-/// Next instruction index via `mNext`; [kInvalidInstruction] at chain end.
-#[inline]
-pub(crate) unsafe fn next_pc(pc: LIntPtr, vm: &mut BoyiaVM) -> LIntPtr {
-    if pc < 0 {
-        return kInvalidInstruction;
-    }
-    let inst = instruction_ptr_at(vm, pc);
-    if inst.is_null() {
-        return kInvalidInstruction;
-    }
-    let next = (*inst).mNext;
-    if next == kInvalidInstruction {
-        kInvalidInstruction
-    } else {
-        next
-    }
-}
-
-/// Legacy alias: next instruction pointer from index (used where a pointer is still needed).
-#[inline]
-pub(crate) unsafe fn next_instruction(inst: *const Instruction, vm: &mut BoyiaVM) -> *mut Instruction {
-    if inst.is_null() {
-        return ptr::null_mut();
-    }
-    if let Some(idx) = vm.mVMCode.ptr_to_index(inst) {
-        let next = next_pc(idx as LIntPtr, vm);
-        instruction_ptr_at(vm, next)
-    } else {
-        ptr::null_mut()
-    }
 }
 
 /// Reset scene of global execute state. Strict 1:1 match of ResetScene in BoyiaCore.cpp.
@@ -816,12 +794,11 @@ unsafe fn handle_if_end(_inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleRe
     let mut pc = (*e_state).mStackFrame.mPC;
     let mut tmp_idx = next_pc(pc, vm);
     while pc_is_valid(tmp_idx) {
-        let tmp_inst = instruction_ptr_at(vm, tmp_idx);
-        if tmp_inst.is_null() {
+        let Some(tmp_inst) = vm.mVMCode.instruction_at_offset(tmp_idx) else {
             break;
-        }
-        if (*tmp_inst).mOPCode == CmdType::kCmdElif || (*tmp_inst).mOPCode == CmdType::kCmdElse {
-            pc = tmp_idx + (*tmp_inst).mOPRight.int_value();
+        };
+        if tmp_inst.mOPCode == CmdType::kCmdElif || tmp_inst.mOPCode == CmdType::kCmdElse {
+            pc = tmp_idx + tmp_inst.mOPRight.int_value();
             tmp_idx = next_pc(pc, vm);
         } else {
             break;
@@ -904,7 +881,7 @@ unsafe fn handle_call_native(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHand
 unsafe fn find_obj_prop(
     lval: *const BoyiaValue,
     rval: LUintPtr,
-    inst: *mut crate::types::Instruction,
+    mut inst: Option<&mut Instruction>,
     _vm: &mut BoyiaVM,
 ) -> *mut BoyiaValue {
     if lval.is_null() || (*lval).mValueType != ValueType::BY_CLASS {
@@ -918,13 +895,13 @@ unsafe fn find_obj_prop(
     let mut idx: LInt = 0;
     while idx < (*fun).mParamSize {
         if (*fun).mParams.add(idx as usize).read().mNameKey == rval {
-            if !inst.is_null() {
-                let cache = if (*inst).mCache.is_null() {
+            if let Some(ref mut inst) = inst {
+                let cache = if inst.mCache.is_null() {
                     let c = create_inline_cache();
-                    (*inst).mCache = c;
+                    inst.mCache = c;
                     c
                 } else {
-                    (*inst).mCache
+                    inst.mCache
                 };
                 add_prop_inline_cache(cache, klass, idx);
             }
@@ -946,13 +923,13 @@ unsafe fn find_obj_prop(
         while fun_idx < param_size {
             if (*cls_map).mParams.add(fun_idx as usize).read().mNameKey == rval {
                 let result = (*cls_map).mParams.add(fun_idx as usize) as *mut BoyiaValue;
-                if !inst.is_null() {
-                    let cache = if (*inst).mCache.is_null() {
+                if let Some(ref mut inst) = inst {
+                    let cache = if inst.mCache.is_null() {
                         let c = create_inline_cache();
-                        (*inst).mCache = c;
+                        inst.mCache = c;
                         c
                     } else {
-                        (*inst).mCache
+                        inst.mCache
                     };
                     println!("[find_obj_prop] add inline cache");
                     add_fun_inline_cache(cache, klass, result);
@@ -1180,8 +1157,8 @@ unsafe fn handle_get_prop(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleR
         return OpHandleResult::kOpResultSuccess;
     }
 
-    let rval = (*inst).mOPRight.int_value() as LUintPtr;
-    let result = find_obj_prop(lval, rval, inst as *mut Instruction, vm);
+    let rval = inst.mOPRight.int_value() as LUintPtr;
+    let result = find_obj_prop(lval, rval, Some(inst), vm);
     if result.is_null() {
         eprintln!(
             "[handle_get_prop] find_obj_prop failed: lval type={}, rval(prop key)={}",
@@ -1296,9 +1273,8 @@ unsafe fn handle_fun_create(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandl
         }
         init_function((*vm).mFunTable.add((*vm).mFunSize as usize), vm);
         if hash_key == 0 {
-            let inst_mut = inst as *mut Instruction;
-            (*inst_mut).mOPLeft.mType = OpType::OP_CONST_NUMBER;
-            (*inst_mut).mOPLeft.set_int_value(((*vm).mFunSize - 1) as LIntPtr);
+            inst.mOPLeft.mType = OpType::OP_CONST_NUMBER;
+            inst.mOPLeft.set_int_value(((*vm).mFunSize - 1) as LIntPtr);
             let _ = set_int_result((*vm).mFunSize - 1, &mut *vm);
             return OpHandleResult::kOpResultSuccess;
         }
@@ -1567,11 +1543,7 @@ pub(crate) unsafe fn exec_instruction(vm: &mut BoyiaVM) {
     eprintln!("[exec_instruction] dispatching first inst");
     while pc_is_valid((*e_state).mStackFrame.mPC) {
         let pc = (*e_state).mStackFrame.mPC;
-        let inst_ptr = instruction_ptr_at(vm, pc);
-        if inst_ptr.is_null() {
-            break;
-        }
-        let result = dispatch_instruction(&mut *inst_ptr, vm);
+        let result = dispatch_instruction_at(pc, vm);
         e_state = vm.mEState;
         if result == OpHandleResult::kOpResultEnd {
             break;
