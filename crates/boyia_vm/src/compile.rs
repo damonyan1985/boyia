@@ -9,11 +9,6 @@ use crate::core::get_runtime_from_vm;
 use crate::types::*;
 use std::ptr;
 
-#[inline]
-unsafe fn cs_vm(cs: *mut CompileState) -> &'static mut BoyiaVM {
-    &mut *(*cs).mVm
-}
-
 const MAX_IDENT_LEN: usize = 256;
 
 /// Syntax error codes (match BoyiaCore.cpp SntxError / SEMI_EXPECTED etc.).
@@ -27,8 +22,8 @@ enum SntxError {
     RptrExpected,
 }
 
-unsafe fn sntx_error_build(err: SntxError, cs: *const CompileState) {
-    let line = if cs.is_null() { 0 } else { (*cs).mLineNum };
+unsafe fn sntx_error_build(err: SntxError, cs: &CompileState) {
+    let line = cs.mLineNum;
     let msg = match err {
         SntxError::SemiExpected => "semicolon expected",
         SntxError::CreateMapError => "create map error: identifier or string expected",
@@ -50,28 +45,28 @@ fn hash_ident(s: &[u8]) -> LUintPtr {
 
 /// Match C++ AddColumn(CompileState* cs, LInt number): advance mProg and mLineNum by number.
 #[inline]
-unsafe fn add_column(cs: *mut CompileState, number: LInt) {
-    (*cs).mProg = (*cs).mProg.offset(number as isize);
-    (*cs).mLineNum += number;
+unsafe fn add_column(cs: &mut CompileState, number: LInt) {
+    cs.mProg = cs.mProg.offset(number as isize);
+    cs.mLineNum += number;
 }
 
 #[inline]
-unsafe fn cur_byte(cs: *mut CompileState) -> u8 {
-    if (*cs).mProg.is_null() {
+unsafe fn cur_byte(cs: &mut CompileState) -> u8 {
+    if cs.mProg.is_null() {
         return 0;
     }
-    *(*cs).mProg as u8
+    *cs.mProg as u8
 }
 
 /// Match C++ NewLine(CompileState* cs): ++mLineNum; mColumnNum = 0.
 #[inline]
-unsafe fn new_line(cs: *mut CompileState) {
-    (*cs).mLineNum += 1;
-    (*cs).mColumnNum = 0;
+unsafe fn new_line(cs: &mut CompileState) {
+    cs.mLineNum += 1;
+    cs.mColumnNum = 0;
 }
 
 /// Match C++ NextToken leading loop: while (LIsSpace(*mProg) && *mProg) { if \n NewLine(cs); AddColumn(cs, 1); }
-unsafe fn skip_spaces(cs: *mut CompileState) {
+unsafe fn skip_spaces(cs: &mut CompileState) {
     loop {
         let c = cur_byte(cs);
         if c != b' ' && c != b'\t' && c != b'\r' && c != b'\n' {
@@ -83,25 +78,25 @@ unsafe fn skip_spaces(cs: *mut CompileState) {
         if c == b'\n' {
             new_line(cs);
         } else {
-            (*cs).mColumnNum += 1;
+            cs.mColumnNum += 1;
         }
         add_column(cs, 1);
     }
 }
 
 /// Match C++ SkipComment(CompileState* cs): filter /* */ and // comments.
-unsafe fn skip_comment(cs: *mut CompileState) {
+unsafe fn skip_comment(cs: &mut CompileState) {
     if cur_byte(cs) != b'/' {
         return;
     }
-    let next = (*cs).mProg.add(1).read() as u8;
+    let next = cs.mProg.add(1).read() as u8;
     if next == b'*' {
         add_column(cs, 2);
         loop {
             if cur_byte(cs) == 0 {
                 return;
             }
-            if cur_byte(cs) == b'*' && (*cs).mProg.add(1).read() as u8 == b'/' {
+            if cur_byte(cs) == b'*' && cs.mProg.add(1).read() as u8 == b'/' {
                 add_column(cs, 2);
                 break;
             }
@@ -152,14 +147,13 @@ unsafe fn set_code_position(_code_index: usize, _row: LInt, _column: LInt, _vm: 
 /// PutInstruction(left, right, op, cs) per BoyiaCore.cpp: allocate, init operands from OpCommand, set op, link chain, SetCodePosition.
 /// Use OpCommand::none() for no operand; OpCommand::const_number(v), OpCommand::reg0(), etc. for operands. Returns new instruction index.
 unsafe fn put_instruction(
-    cs: *mut CompileState,
+    cs: &mut CompileState,
     left: OpCommand,
     right: OpCommand,
     op: CmdType,
 ) -> Option<usize> {
-    let vm = cs_vm(cs);
-    let idx = allocate_instruction(vm)?;
-    let new_ins = get_instruction_mut(vm, idx);
+    let idx = allocate_instruction(cs.mVm)?;
+    let new_ins = get_instruction_mut(cs.mVm, idx);
 
     // Init member (match C++ newIns->mOPLeft = *left; newIns->mOPRight = *right when not none)
     (*new_ins).mOPLeft.mType = OpType::OP_NONE;
@@ -179,17 +173,17 @@ unsafe fn put_instruction(
     (*new_ins).mCache = ptr::null_mut();
 
     // CommandTable* cmds = cs->mCmds; link chain by instruction index.
-    let cmds = &mut (*cs).mCmds;
+    let cmds = &mut cs.mCmds;
     let end_idx = cmds.mEnd;
     if end_idx < 0 {
         cmds.mBegin = idx as LIntPtr;
     } else {
-        let prev = get_instruction_mut(vm, end_idx as usize);
+        let prev = get_instruction_mut(cs.mVm, end_idx as usize);
         (*prev).mNext = idx as LIntPtr;
     }
     cmds.mEnd = idx as LIntPtr;
 
-    set_code_position(idx, (*cs).mLineNum, (*cs).mColumnNum, vm);
+    set_code_position(idx, cs.mLineNum, cs.mColumnNum, cs.mVm);
     Some(idx)
 }
 
@@ -209,24 +203,23 @@ unsafe fn patch_offset(vm: &mut BoyiaVM, index: usize, is_right: bool, offset: L
 }
 
 /// Create executor: clear mCmds (matches C++ CreateExecutor).
-unsafe fn create_executor(cs: *mut CompileState) {
-    (*cs).mCmds.mBegin = kInvalidInstruction;
-    (*cs).mCmds.mEnd = kInvalidInstruction;
+unsafe fn create_executor(cs: &mut CompileState) {
+    cs.mCmds.mBegin = kInvalidInstruction;
+    cs.mCmds.mEnd = kInvalidInstruction;
 }
 
 /// Append current chain to mEntry (matches C++ AppendEntry).
-unsafe fn append_entry(cs: *mut CompileState) {
-    let vm = cs_vm(cs);
-    let begin = (*cs).mCmds.mBegin;
+unsafe fn append_entry(cs: &mut CompileState) {
+    let begin = cs.mCmds.mBegin;
     if begin < 0 {
         return;
     }
-    vm.mEntry.push_entry(begin as LInt);
+    cs.mVm.mEntry.push_entry(begin as LInt);
 }
 
 /// Slice of current token name (mToken.mTokenName). Valid until next NextToken/Putback.
-unsafe fn token_name_slice(cs: *mut CompileState) -> &'static [u8] {
-    let name = &(*cs).mToken.mTokenName;
+unsafe fn token_name_slice(cs: &mut CompileState) -> &'static [u8] {
+    let name = &cs.mToken.mTokenName;
     if name.mPtr.is_null() || name.mLen <= 0 {
         return &[];
     }
@@ -235,21 +228,20 @@ unsafe fn token_name_slice(cs: *mut CompileState) -> &'static [u8] {
 }
 
 /// Parse number from current token (NUMBER). Matches C++ STR2_INT(mToken.mTokenName).
-unsafe fn parse_number_from_token(cs: *mut CompileState) -> LIntPtr {
+unsafe fn parse_number_from_token(cs: &mut CompileState) -> LIntPtr {
     let s = std::str::from_utf8(token_name_slice(cs)).unwrap_or("0");
     s.parse::<LInt>().unwrap_or(0) as LIntPtr
 }
 
 /// Parse real from current token (REAL). Matches C++ Str2Real(&mToken.mTokenName).
-unsafe fn parse_real_from_token(cs: *mut CompileState) -> LReal64 {
+unsafe fn parse_real_from_token(cs: &mut CompileState) -> LReal64 {
     let s = std::str::from_utf8(token_name_slice(cs)).unwrap_or("0");
     s.parse::<LReal64>().unwrap_or(0.0)
 }
 
 /// Resolve identifier from current token name via [Runtime::gen_identifier].
-unsafe fn gen_identifier(cs: *mut CompileState) -> LUintPtr {
-    let vm = cs_vm(cs);
-    let rt = get_runtime_from_vm(vm);
+unsafe fn gen_identifier(cs: &mut CompileState) -> LUintPtr {
+    let rt = get_runtime_from_vm(cs.mVm);
     if rt.is_null() {
         return hash_ident(token_name_slice(cs));
     }
@@ -259,9 +251,9 @@ unsafe fn gen_identifier(cs: *mut CompileState) -> LUintPtr {
 }
 
 /// GenIdentifier for object literal key: STRING_VALUE uses content length (mLen - 2), else full token. Match EvalObject keyStr in BoyiaCore.cpp.
-unsafe fn gen_identifier_object_key(cs: *mut CompileState) -> LUintPtr {
-    let name = &(*cs).mToken.mTokenName;
-    let slice = if (*cs).mToken.mTokenType == TokenType::STRING_VALUE {
+unsafe fn gen_identifier_object_key(cs: &mut CompileState) -> LUintPtr {
+    let name = &cs.mToken.mTokenName;
+    let slice = if cs.mToken.mTokenType == TokenType::STRING_VALUE {
         let len = (name.mLen - 2).max(0) as usize;
         if name.mPtr.is_null() || len == 0 {
             &[]
@@ -271,8 +263,7 @@ unsafe fn gen_identifier_object_key(cs: *mut CompileState) -> LUintPtr {
     } else {
         token_name_slice(cs)
     };
-    let vm = cs_vm(cs);
-    let rt = get_runtime_from_vm(vm);
+    let rt = get_runtime_from_vm(cs.mVm);
     if rt.is_null() {
         return hash_ident(slice);
     }
@@ -281,17 +272,17 @@ unsafe fn gen_identifier_object_key(cs: *mut CompileState) -> LUintPtr {
 }
 
 /// Putback: rewind by current token length (matches C++ Putback -> AddColumn(cs, -cs->mToken.mTokenName.mLen)).
-unsafe fn putback(cs: *mut CompileState) {
-    add_column(cs, -(*cs).mToken.mTokenName.mLen);
+unsafe fn putback(cs: &mut CompileState) {
+    add_column(cs, -cs.mToken.mTokenName.mLen);
 }
 
 /// GetIdentifer: match C++ LIsAlpha first char, then _/alpha/digit. LookUp for keyword. Set mTokenName inside.
-unsafe fn get_identifier(cs: *mut CompileState) -> bool {
+unsafe fn get_identifier(cs: &mut CompileState) -> bool {
     let c = cur_byte(cs);
     if !c.is_ascii_alphabetic() && c != b'_' {
         return false;
     }
-    (*cs).mToken.mTokenName.mPtr = (*cs).mProg;
+    cs.mToken.mTokenName.mPtr = cs.mProg;
     let mut len = 0usize;
     while len < MAX_IDENT_LEN - 1 {
         let ch = cur_byte(cs);
@@ -302,67 +293,67 @@ unsafe fn get_identifier(cs: *mut CompileState) -> bool {
             break;
         }
     }
-    (*cs).mToken.mTokenName.mLen = len as LInt;
-    let start = (*cs).mProg.offset(-(len as isize));
+    cs.mToken.mTokenName.mLen = len as LInt;
+    let start = cs.mProg.offset(-(len as isize));
     let slice = std::slice::from_raw_parts(start as *const u8, len);
-    (*cs).mToken.mTokenType = TokenType::IDENTIFIER;
-    (*cs).mToken.mTokenValue = TokenValue::NONE;
+    cs.mToken.mTokenType = TokenType::IDENTIFIER;
+    cs.mToken.mTokenValue = TokenValue::NONE;
     if slice == b"var" {
-        (*cs).mToken.mTokenType = TokenType::KEYWORD;
-        (*cs).mToken.mTokenValue = TokenValue::BY_VAR;
+        cs.mToken.mTokenType = TokenType::KEYWORD;
+        cs.mToken.mTokenValue = TokenValue::BY_VAR;
     } else if slice == b"fun" {
-        (*cs).mToken.mTokenType = TokenType::KEYWORD;
-        (*cs).mToken.mTokenValue = TokenValue::BY_FUNC;
+        cs.mToken.mTokenType = TokenType::KEYWORD;
+        cs.mToken.mTokenValue = TokenValue::BY_FUNC;
     } else if slice == b"class" {
-        (*cs).mToken.mTokenType = TokenType::KEYWORD;
-        (*cs).mToken.mTokenValue = TokenValue::BY_CLASS;
+        cs.mToken.mTokenType = TokenType::KEYWORD;
+        cs.mToken.mTokenValue = TokenValue::BY_CLASS;
     } else if slice == b"if" {
-        (*cs).mToken.mTokenType = TokenType::KEYWORD;
-        (*cs).mToken.mTokenValue = TokenValue::BY_IF;
+        cs.mToken.mTokenType = TokenType::KEYWORD;
+        cs.mToken.mTokenValue = TokenValue::BY_IF;
     } else if slice == b"elif" {
-        (*cs).mToken.mTokenType = TokenType::KEYWORD;
-        (*cs).mToken.mTokenValue = TokenValue::BY_ELIF;
+        cs.mToken.mTokenType = TokenType::KEYWORD;
+        cs.mToken.mTokenValue = TokenValue::BY_ELIF;
     } else if slice == b"else" {
-        (*cs).mToken.mTokenType = TokenType::KEYWORD;
-        (*cs).mToken.mTokenValue = TokenValue::BY_ELSE;
+        cs.mToken.mTokenType = TokenType::KEYWORD;
+        cs.mToken.mTokenValue = TokenValue::BY_ELSE;
     } else if slice == b"do" {
-        (*cs).mToken.mTokenType = TokenType::KEYWORD;
-        (*cs).mToken.mTokenValue = TokenValue::BY_DO;
+        cs.mToken.mTokenType = TokenType::KEYWORD;
+        cs.mToken.mTokenValue = TokenValue::BY_DO;
     } else if slice == b"while" {
-        (*cs).mToken.mTokenType = TokenType::KEYWORD;
-        (*cs).mToken.mTokenValue = TokenValue::BY_WHILE;
+        cs.mToken.mTokenType = TokenType::KEYWORD;
+        cs.mToken.mTokenValue = TokenValue::BY_WHILE;
     } else if slice == b"for" {
-        (*cs).mToken.mTokenType = TokenType::KEYWORD;
-        (*cs).mToken.mTokenValue = TokenValue::BY_FOR;
+        cs.mToken.mTokenType = TokenType::KEYWORD;
+        cs.mToken.mTokenValue = TokenValue::BY_FOR;
     } else if slice == b"break" {
-        (*cs).mToken.mTokenType = TokenType::KEYWORD;
-        (*cs).mToken.mTokenValue = TokenValue::BY_BREAK;
+        cs.mToken.mTokenType = TokenType::KEYWORD;
+        cs.mToken.mTokenValue = TokenValue::BY_BREAK;
     } else if slice == b"extends" {
-        (*cs).mToken.mTokenType = TokenType::KEYWORD;
-        (*cs).mToken.mTokenValue = TokenValue::BY_EXTEND;
+        cs.mToken.mTokenType = TokenType::KEYWORD;
+        cs.mToken.mTokenValue = TokenValue::BY_EXTEND;
     } else if slice == b"prop" {
-        (*cs).mToken.mTokenType = TokenType::KEYWORD;
-        (*cs).mToken.mTokenValue = TokenValue::BY_PROP;
+        cs.mToken.mTokenType = TokenType::KEYWORD;
+        cs.mToken.mTokenValue = TokenValue::BY_PROP;
     } else if slice == b"return" {
-        (*cs).mToken.mTokenType = TokenType::KEYWORD;
-        (*cs).mToken.mTokenValue = TokenValue::BY_RETURN;
+        cs.mToken.mTokenType = TokenType::KEYWORD;
+        cs.mToken.mTokenValue = TokenValue::BY_RETURN;
     } else if slice == b"async" {
-        (*cs).mToken.mTokenType = TokenType::KEYWORD;
-        (*cs).mToken.mTokenValue = TokenValue::BY_ASYNC;
+        cs.mToken.mTokenType = TokenType::KEYWORD;
+        cs.mToken.mTokenValue = TokenValue::BY_ASYNC;
     } else if slice == b"await" {
-        (*cs).mToken.mTokenType = TokenType::KEYWORD;
-        (*cs).mToken.mTokenValue = TokenValue::BY_AWAIT;
+        cs.mToken.mTokenType = TokenType::KEYWORD;
+        cs.mToken.mTokenValue = TokenValue::BY_AWAIT;
     }
     true
 }
 
 /// GetLogicValue: match C++ MStrchr("&|!<>="). Set mTokenName inside. Return true if matched.
-unsafe fn get_logic_value(cs: *mut CompileState) -> bool {
+unsafe fn get_logic_value(cs: &mut CompileState) -> bool {
     let c = cur_byte(cs);
-    (*cs).mToken.mTokenName.mPtr = (*cs).mProg;
+    cs.mToken.mTokenName.mPtr = cs.mProg;
     let (len, val) = match c {
         b'=' => {
-            if (*cs).mProg.add(1).read() as u8 == b'=' {
+            if cs.mProg.add(1).read() as u8 == b'=' {
                 add_column(cs, 2);
                 (2, TokenValue::EQ)
             } else {
@@ -370,7 +361,7 @@ unsafe fn get_logic_value(cs: *mut CompileState) -> bool {
             }
         }
         b'!' => {
-            if (*cs).mProg.add(1).read() as u8 == b'=' {
+            if cs.mProg.add(1).read() as u8 == b'=' {
                 add_column(cs, 2);
                 (2, TokenValue::NE)
             } else {
@@ -379,7 +370,7 @@ unsafe fn get_logic_value(cs: *mut CompileState) -> bool {
             }
         }
         b'<' => {
-            if (*cs).mProg.add(1).read() as u8 == b'=' {
+            if cs.mProg.add(1).read() as u8 == b'=' {
                 add_column(cs, 2);
                 (2, TokenValue::LE)
             } else {
@@ -388,7 +379,7 @@ unsafe fn get_logic_value(cs: *mut CompileState) -> bool {
             }
         }
         b'>' => {
-            if (*cs).mProg.add(1).read() as u8 == b'=' {
+            if cs.mProg.add(1).read() as u8 == b'=' {
                 add_column(cs, 2);
                 (2, TokenValue::GE)
             } else {
@@ -397,7 +388,7 @@ unsafe fn get_logic_value(cs: *mut CompileState) -> bool {
             }
         }
         b'&' => {
-            if (*cs).mProg.add(1).read() as u8 == b'&' {
+            if cs.mProg.add(1).read() as u8 == b'&' {
                 add_column(cs, 2);
                 (2, TokenValue::AND)
             } else {
@@ -405,7 +396,7 @@ unsafe fn get_logic_value(cs: *mut CompileState) -> bool {
             }
         }
         b'|' => {
-            if (*cs).mProg.add(1).read() as u8 == b'|' {
+            if cs.mProg.add(1).read() as u8 == b'|' {
                 add_column(cs, 2);
                 (2, TokenValue::OR)
             } else {
@@ -415,21 +406,21 @@ unsafe fn get_logic_value(cs: *mut CompileState) -> bool {
         _ => (0, TokenValue::NONE),
     };
     if len != 0 {
-        (*cs).mToken.mTokenName.mLen = len as LInt;
-        (*cs).mToken.mTokenType = TokenType::DELIMITER;
-        (*cs).mToken.mTokenValue = val;
+        cs.mToken.mTokenName.mLen = len as LInt;
+        cs.mToken.mTokenType = TokenType::DELIMITER;
+        cs.mToken.mTokenValue = val;
         return true;
     }
     false
 }
 
 /// GetStringValue: match C++ only '"', stop at '"' or '\r'. mTokenName.mPtr = first char inside (after quote), mLen = len+2.
-unsafe fn get_string_value(cs: *mut CompileState) -> bool {
+unsafe fn get_string_value(cs: &mut CompileState) -> bool {
     if cur_byte(cs) != b'"' {
         return false;
     }
     add_column(cs, 1);
-    (*cs).mToken.mTokenName.mPtr = (*cs).mProg;
+    cs.mToken.mTokenName.mPtr = cs.mProg;
     let mut len = 0i32;
     while cur_byte(cs) != b'"' && cur_byte(cs) != b'\r' && cur_byte(cs) != 0 {
         len += 1;
@@ -440,14 +431,14 @@ unsafe fn get_string_value(cs: *mut CompileState) -> bool {
     } else {
         add_column(cs, 1);
     }
-    (*cs).mToken.mTokenType = TokenType::STRING_VALUE;
-    (*cs).mToken.mTokenValue = TokenValue::QUOTE;
-    (*cs).mToken.mTokenName.mLen = len + 2;
+    cs.mToken.mTokenType = TokenType::STRING_VALUE;
+    cs.mToken.mTokenValue = TokenValue::QUOTE;
+    cs.mToken.mTokenName.mLen = len + 2;
     true
 }
 
 /// GetDelimiter: match C++ single char from "+-*/%^=;,'.:()[]{}". Set mTokenName.mPtr/mLen = 1 inside.
-unsafe fn get_delimiter(cs: *mut CompileState) -> bool {
+unsafe fn get_delimiter(cs: &mut CompileState) -> bool {
     let c = cur_byte(cs);
     let val = match c {
         b'+' => TokenValue::ADD,
@@ -470,20 +461,20 @@ unsafe fn get_delimiter(cs: *mut CompileState) -> bool {
         b'}' => TokenValue::BLOCK_END,
         _ => return false,
     };
-    (*cs).mToken.mTokenName.mPtr = (*cs).mProg;
-    (*cs).mToken.mTokenName.mLen = 1;
+    cs.mToken.mTokenName.mPtr = cs.mProg;
+    cs.mToken.mTokenName.mLen = 1;
     add_column(cs, 1);
-    (*cs).mToken.mTokenType = TokenType::DELIMITER;
-    (*cs).mToken.mTokenValue = val;
+    cs.mToken.mTokenType = TokenType::DELIMITER;
+    cs.mToken.mTokenValue = val;
     true
 }
 
 /// GetNumberValue: match C++ GetNumberValue (digits and optional `.` + fractional digits).
-unsafe fn get_number_value(cs: *mut CompileState) -> bool {
+unsafe fn get_number_value(cs: &mut CompileState) -> bool {
     if !cur_byte(cs).is_ascii_digit() {
         return false;
     }
-    (*cs).mToken.mTokenName.mPtr = (*cs).mProg;
+    cs.mToken.mTokenName.mPtr = cs.mProg;
     let mut len = 0usize;
     let mut dot_num: LInt = 0;
     while cur_byte(cs).is_ascii_digit()
@@ -495,30 +486,30 @@ unsafe fn get_number_value(cs: *mut CompileState) -> bool {
         len += 1;
         add_column(cs, 1);
     }
-    (*cs).mToken.mTokenName.mLen = len as LInt;
-    (*cs).mToken.mTokenType = if dot_num == 0 {
+    cs.mToken.mTokenName.mLen = len as LInt;
+    cs.mToken.mTokenType = if dot_num == 0 {
         TokenType::NUMBER
     } else {
         TokenType::REAL
     };
-    (*cs).mToken.mTokenValue = TokenValue::NONE;
+    cs.mToken.mTokenValue = TokenValue::NONE;
     true
 }
 
 /// NextToken: match C++ NextToken exactly.
 /// Clear token; skip spaces (NewLine on \n); if \0 set DELIMITER+BY_END and mTokenName; SkipComment; Get* set mTokenName inside.
-unsafe fn next_token(cs: *mut CompileState) {
-    (*cs).mToken.mTokenType = TokenType::NONE;
-    (*cs).mToken.mTokenValue = TokenValue::NONE;
-    (*cs).mToken.mTokenName.mPtr = ptr::null_mut();
-    (*cs).mToken.mTokenName.mLen = 0;
+unsafe fn next_token(cs: &mut CompileState) {
+    cs.mToken.mTokenType = TokenType::NONE;
+    cs.mToken.mTokenValue = TokenValue::NONE;
+    cs.mToken.mTokenName.mPtr = ptr::null_mut();
+    cs.mToken.mTokenName.mLen = 0;
 
     skip_spaces(cs);
     if cur_byte(cs) == 0 {
-        (*cs).mToken.mTokenType = TokenType::DELIMITER;
-        (*cs).mToken.mTokenValue = TokenValue::BY_END;
-        (*cs).mToken.mTokenName.mPtr = (*cs).mProg;
-        (*cs).mToken.mTokenName.mLen = 0;
+        cs.mToken.mTokenType = TokenType::DELIMITER;
+        cs.mToken.mTokenValue = TokenValue::BY_END;
+        cs.mToken.mTokenName.mPtr = cs.mProg;
+        cs.mToken.mTokenName.mLen = 0;
         return;
     }
 
@@ -542,10 +533,9 @@ unsafe fn next_token(cs: *mut CompileState) {
 }
 
 /// Add string from current token (STRING_VALUE) to VM string table; return index. C++ CopyStringFromToken: mPtr points to content (after opening quote), mLen = content_len+2.
-unsafe fn add_string_from_token(cs: *mut CompileState) -> Option<usize> {
-    let vm = cs_vm(cs);
-    let st = &mut vm.mStrTable;
-    let name = &(*cs).mToken.mTokenName;
+unsafe fn add_string_from_token(cs: &mut CompileState) -> Option<usize> {
+    let st = &mut cs.mVm.mStrTable;
+    let name = &cs.mToken.mTokenName;
     let inner_len = (name.mLen - 2).max(0) as usize;
     let src = name.mPtr;
     let layout = std::alloc::Layout::array::<LInt8>(inner_len + 1).ok()?;
@@ -580,37 +570,37 @@ unsafe fn declare_global_var(vm: &mut BoyiaVM, name_key: LUintPtr) {
     (*val).mValue.mIntVal = 0;
 }
 
-unsafe fn init_params_with_anonym(cs: *mut CompileState, is_anonym: bool) {
-    (*cs).mFunctionScopes.push(FunctionScope::new_with_anonym(is_anonym));
+unsafe fn init_params_with_anonym(cs: &mut CompileState, is_anonym: bool) {
+    cs.mFunctionScopes.push(FunctionScope::new_with_anonym(is_anonym));
     loop {
         next_token(cs);
-        if (*cs).mToken.mTokenValue == TokenValue::RPTR {
+        if cs.mToken.mTokenValue == TokenValue::RPTR {
             break;
         }
-        if (*cs).mToken.mTokenType != TokenType::IDENTIFIER {
+        if cs.mToken.mTokenType != TokenType::IDENTIFIER {
             break;
         }
         let name_key = gen_identifier(cs);
-        if let Some(fs) = (*cs).mFunctionScopes.last_mut() {
+        if let Some(fs) = cs.mFunctionScopes.last_mut() {
             fs.add_param(name_key);
         }
         let key = name_key as LIntPtr;
         let _ = put_instruction(cs, OpCommand::const_number(key), OpCommand::none(), CmdType::kCmdParamCreate);
         next_token(cs);
-        if (*cs).mToken.mTokenValue != TokenValue::COMMA {
+        if cs.mToken.mTokenValue != TokenValue::COMMA {
             break;
         }
     }
     // Local scopes are pushed on `{` in [block_statement] and popped on `}`.
 }
 
-unsafe fn init_params(cs: *mut CompileState) {
+unsafe fn init_params(cs: &mut CompileState) {
     init_params_with_anonym(cs, false);
 }
 
 /// Emit OP_LOCAL when `key` is in the innermost [FunctionScope], else OP_VAR (globals / outer / unknown).
-unsafe fn compile_var_operand(cs: *mut CompileState, key: LUintPtr) -> OpCommand {
-    if let Some(fs) = (*cs).mFunctionScopes.last() {
+unsafe fn compile_var_operand(cs: &mut CompileState, key: LUintPtr) -> OpCommand {
+    if let Some(fs) = cs.mFunctionScopes.last() {
         if let Some(off) = fs.resolve_local_frame_offset(key) {
             return OpCommand::op_local(off);
         }
@@ -631,13 +621,13 @@ fn find_native_func(key: LUintPtr, vm: &mut BoyiaVM) -> LInt {
 }
 
 /// PushArgStatement(needPushFunction, cs) per BoyiaCore.cpp: if needPushFunction { ++argCount; PutInstruction PushArg; NextToken; if RPTR Assign(argCount) return; Putback; } do { EvalExpression; PutInstruction PushArg; ++argCount; } while (COMMA); PutInstruction Assign(argCount).
-unsafe fn push_arg_statement(cs: *mut CompileState, need_push_function: bool) {
+unsafe fn push_arg_statement(cs: &mut CompileState, need_push_function: bool) {
     let mut arg_count: LIntPtr = 0;
     if need_push_function {
         arg_count += 1;
         let _ = put_instruction(cs, OpCommand::reg0(), OpCommand::none(), CmdType::kCmdPushArg);
         next_token(cs); // if token == ')' exit
-        if (*cs).mToken.mTokenValue == TokenValue::RPTR {
+        if cs.mToken.mTokenValue == TokenValue::RPTR {
             let _ = put_instruction(cs, OpCommand::reg1(), OpCommand::const_number(arg_count), CmdType::kCmdAssign);
             return;
         }
@@ -648,14 +638,14 @@ unsafe fn push_arg_statement(cs: *mut CompileState, need_push_function: bool) {
         eval_expression(cs);
         let _ = put_instruction(cs, OpCommand::reg0(), OpCommand::none(), CmdType::kCmdPushArg);
         arg_count += 1;
-        if (*cs).mToken.mTokenValue != TokenValue::COMMA {
+        if cs.mToken.mTokenValue != TokenValue::COMMA {
             break;
         }
     }
     let _ = put_instruction(cs, OpCommand::reg1(), OpCommand::const_number(arg_count), CmdType::kCmdAssign);
 }
 
-unsafe fn call_statement(cs: *mut CompileState, obj_type: OpType, obj_value: LIntPtr) {
+unsafe fn call_statement(cs: &mut CompileState, obj_type: OpType, obj_value: LIntPtr) {
     push_arg_statement(cs, true);
     if obj_type == OpType::OP_VAR {
         let _ = put_instruction(cs, OpCommand::reg0(), OpCommand::none(), CmdType::kCmdPop);
@@ -672,31 +662,31 @@ unsafe fn call_statement(cs: *mut CompileState, obj_type: OpType, obj_value: LIn
     let push_idx = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdPushScene).unwrap_or(0);
     let _ = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdPushParams);
     let fun_idx = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdCallFunction).unwrap_or(0);
-    patch_offset(cs_vm(cs), push_idx, false, (fun_idx as LIntPtr).wrapping_sub(push_idx as LIntPtr));
+    patch_offset(cs.mVm, push_idx, false, (fun_idx as LIntPtr).wrapping_sub(push_idx as LIntPtr));
 }
 
-unsafe fn call_native_statement(cs: *mut CompileState, idx: LInt) {
+unsafe fn call_native_statement(cs: &mut CompileState, idx: LInt) {
     next_token(cs);
     push_arg_statement(cs, false);
     let _ = put_instruction(cs, OpCommand::const_number(0), OpCommand::none(), CmdType::kCmdPushObj);
     let push_idx = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdPushScene).unwrap_or(0);
     let _ = put_instruction(cs, OpCommand::const_number(idx as LIntPtr), OpCommand::none(), CmdType::kCmdCallNative);
     let pop_idx = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdPopScene).unwrap_or(0);
-    patch_offset(cs_vm(cs), push_idx, false, (pop_idx as LIntPtr).wrapping_sub(push_idx as LIntPtr));
+    patch_offset(cs.mVm, push_idx, false, (pop_idx as LIntPtr).wrapping_sub(push_idx as LIntPtr));
 }
 
-unsafe fn eval_get_value(cs: *mut CompileState, obj_key: LUintPtr) {
+unsafe fn eval_get_value(cs: &mut CompileState, obj_key: LUintPtr) {
     let src = compile_var_operand(cs, obj_key);
     let _ = put_instruction(cs, OpCommand::reg0(), src, CmdType::kCmdAssign);
-    if (*cs).mToken.mTokenValue == TokenValue::DOT {
+    if cs.mToken.mTokenValue == TokenValue::DOT {
         eval_get_prop(cs);
     }
 }
 
 /// EvalGetProp(cs) per BoyiaCore.cpp: NextToken; if not IDENTIFIER return; Push; GenIdentifier; GetProp; NextToken (last must next); LPTR->CallStatement+NextToken+DOT?EvalGetProp; DOT->Pop+EvalGetProp; else Pop.
-unsafe fn eval_get_prop(cs: *mut CompileState) {
+unsafe fn eval_get_prop(cs: &mut CompileState) {
     next_token(cs);
-    if (*cs).mToken.mTokenType != TokenType::IDENTIFIER {
+    if cs.mToken.mTokenType != TokenType::IDENTIFIER {
         return;
     }
     // Push class context for callstatement (same order as C++)
@@ -705,13 +695,13 @@ unsafe fn eval_get_prop(cs: *mut CompileState) {
     let _ = put_instruction(cs, OpCommand::reg0(), OpCommand::const_number(prop_key as LIntPtr), CmdType::kCmdGetProp);
     // Last must next
     next_token(cs);
-    if (*cs).mToken.mTokenValue == TokenValue::LPTR {
+    if cs.mToken.mTokenValue == TokenValue::LPTR {
         call_statement(cs, OpType::OP_VAR, 0);
         next_token(cs);
-        if (*cs).mToken.mTokenValue == TokenValue::DOT {
+        if cs.mToken.mTokenValue == TokenValue::DOT {
             eval_get_prop(cs);
         }
-    } else if (*cs).mToken.mTokenValue == TokenValue::DOT {
+    } else if cs.mToken.mTokenValue == TokenValue::DOT {
         let _ = put_instruction(cs, OpCommand::const_number(0), OpCommand::none(), CmdType::kCmdPop);
         eval_get_prop(cs);
     } else {
@@ -719,22 +709,22 @@ unsafe fn eval_get_prop(cs: *mut CompileState) {
     }
 }
 
-unsafe fn atom(cs: *mut CompileState) {
-    match (*cs).mToken.mTokenType {
+unsafe fn atom(cs: &mut CompileState) {
+    match cs.mToken.mTokenType {
         TokenType::IDENTIFIER => {
             let key = gen_identifier(cs);
-            let idx = find_native_func(key, cs_vm(cs));
+            let idx = find_native_func(key, cs.mVm);
             if idx >= 0 {
                 call_native_statement(cs, idx);
                 next_token(cs);
             } else {
                 next_token(cs);
-                if (*cs).mToken.mTokenValue == TokenValue::LPTR {
+                if cs.mToken.mTokenValue == TokenValue::LPTR {
                     let src = compile_var_operand(cs, key);
                     let _ = put_instruction(cs, OpCommand::reg0(), src, CmdType::kCmdAssign);
                     call_statement(cs, OpType::OP_NONE, 0);
                     next_token(cs);
-                    if (*cs).mToken.mTokenValue == TokenValue::DOT {
+                    if cs.mToken.mTokenValue == TokenValue::DOT {
                         eval_get_prop(cs);
                     }
                 } else {
@@ -743,14 +733,16 @@ unsafe fn atom(cs: *mut CompileState) {
             }
         }
         TokenType::NUMBER => {
-            let _ = put_instruction(cs, OpCommand::reg0(), OpCommand::const_number(parse_number_from_token(cs)), CmdType::kCmdAssign);
+            let n = parse_number_from_token(cs);
+            let _ = put_instruction(cs, OpCommand::reg0(), OpCommand::const_number(n), CmdType::kCmdAssign);
             next_token(cs);
         }
         TokenType::REAL => {
+            let r = parse_real_from_token(cs);
             let _ = put_instruction(
                 cs,
                 OpCommand::reg0(),
-                OpCommand::const_real(parse_real_from_token(cs)),
+                OpCommand::const_real(r),
                 CmdType::kCmdAssign,
             );
             next_token(cs);
@@ -762,15 +754,15 @@ unsafe fn atom(cs: *mut CompileState) {
             next_token(cs);
         }
         _ => {
-            if (*cs).mToken.mTokenValue == TokenValue::RPTR {
+            if cs.mToken.mTokenValue == TokenValue::RPTR {
                 return;
             }
         }
     }
 }
 
-unsafe fn eval_subexpr(cs: *mut CompileState) {
-    if (*cs).mToken.mTokenValue == TokenValue::LPTR {
+unsafe fn eval_subexpr(cs: &mut CompileState) {
+    if cs.mToken.mTokenValue == TokenValue::LPTR {
         eval_expression(cs);
         next_token(cs);
     } else {
@@ -778,8 +770,8 @@ unsafe fn eval_subexpr(cs: *mut CompileState) {
     }
 }
 
-unsafe fn eval_minus(cs: *mut CompileState) {
-    let op = (*cs).mToken.mTokenValue;
+unsafe fn eval_minus(cs: &mut CompileState) {
+    let op = cs.mToken.mTokenValue;
     if op == TokenValue::ADD || op == TokenValue::SUB {
         next_token(cs);
     }
@@ -790,10 +782,10 @@ unsafe fn eval_minus(cs: *mut CompileState) {
     }
 }
 
-unsafe fn eval_arith(cs: *mut CompileState) {
+unsafe fn eval_arith(cs: &mut CompileState) {
     eval_minus(cs);
     loop {
-        let op = (*cs).mToken.mTokenValue;
+        let op = cs.mToken.mTokenValue;
         if op != TokenValue::MUL && op != TokenValue::DIV && op != TokenValue::MOD {
             break;
         }
@@ -810,10 +802,10 @@ unsafe fn eval_arith(cs: *mut CompileState) {
     }
 }
 
-unsafe fn eval_add_sub(cs: *mut CompileState) {
+unsafe fn eval_add_sub(cs: &mut CompileState) {
     eval_arith(cs);
     loop {
-        let op = (*cs).mToken.mTokenValue;
+        let op = cs.mToken.mTokenValue;
         if op != TokenValue::ADD && op != TokenValue::SUB {
             break;
         }
@@ -826,7 +818,7 @@ unsafe fn eval_add_sub(cs: *mut CompileState) {
     }
 }
 
-unsafe fn eval_relational_impl(op: TokenValue, cs: *mut CompileState) {
+unsafe fn eval_relational_impl(op: TokenValue, cs: &mut CompileState) {
     let cmd = match op {
         TokenValue::NOT => CmdType::kCmdNotRelation,
         TokenValue::LT => CmdType::kCmdLtRelation,
@@ -840,11 +832,11 @@ unsafe fn eval_relational_impl(op: TokenValue, cs: *mut CompileState) {
     let _ = put_instruction(cs, OpCommand::reg1(), OpCommand::reg0(), cmd);
 }
 
-unsafe fn eval_relational(cs: *mut CompileState) {
-    if (*cs).mToken.mTokenValue != TokenValue::NOT {
+unsafe fn eval_relational(cs: &mut CompileState) {
+    if cs.mToken.mTokenValue != TokenValue::NOT {
         eval_add_sub(cs);
     }
-    let op = (*cs).mToken.mTokenValue;
+    let op = cs.mToken.mTokenValue;
     const RELOPS: [TokenValue; 7] = [
         TokenValue::NOT,
         TokenValue::LT,
@@ -868,10 +860,10 @@ unsafe fn eval_relational(cs: *mut CompileState) {
     eval_relational_impl(op, cs);
 }
 
-unsafe fn eval_logic(cs: *mut CompileState) {
+unsafe fn eval_logic(cs: &mut CompileState) {
     eval_relational(cs);
     loop {
-        let op = (*cs).mToken.mTokenValue;
+        let op = cs.mToken.mTokenValue;
         if op != TokenValue::AND && op != TokenValue::OR {
             break;
         }
@@ -885,25 +877,25 @@ unsafe fn eval_logic(cs: *mut CompileState) {
 }
 
 /// EvalObject per BoyiaCore.cpp: if not BLOCK_START then EvalLogic; else CreateMap, do { NextToken; if } return; if not id/string SntxError(CREATE_MAP_ERROR); SetMapKey; NextToken; if not :/= SntxError(MAP_KEY_VALUE_ERROR); Push; EvalExpression; Pop; SetMapValue; } while (COMMA); NextToken.
-unsafe fn eval_object(cs: *mut CompileState) {
-    if (*cs).mToken.mTokenValue != TokenValue::BLOCK_START {
+unsafe fn eval_object(cs: &mut CompileState) {
+    if cs.mToken.mTokenValue != TokenValue::BLOCK_START {
         eval_logic(cs);
         return;
     }
     let _ = put_instruction(cs, OpCommand::reg0(), OpCommand::none(), CmdType::kCmdCreateMap);
     loop {
         next_token(cs);
-        if (*cs).mToken.mTokenValue == TokenValue::BLOCK_END {
+        if cs.mToken.mTokenValue == TokenValue::BLOCK_END {
             return;
         }
-        if (*cs).mToken.mTokenType != TokenType::IDENTIFIER && (*cs).mToken.mTokenType != TokenType::STRING_VALUE {
+        if cs.mToken.mTokenType != TokenType::IDENTIFIER && cs.mToken.mTokenType != TokenType::STRING_VALUE {
             sntx_error_build(SntxError::CreateMapError, cs);
             return;
         }
         let key = gen_identifier_object_key(cs);
         let _ = put_instruction(cs, OpCommand::reg0(), OpCommand::const_number(key as LIntPtr), CmdType::kCmdSetMapKey);
         next_token(cs);
-        if (*cs).mToken.mTokenValue != TokenValue::COLON && (*cs).mToken.mTokenValue != TokenValue::ASSIGN {
+        if cs.mToken.mTokenValue != TokenValue::COLON && cs.mToken.mTokenValue != TokenValue::ASSIGN {
             sntx_error_build(SntxError::MapKeyValueError, cs);
             return;
         }
@@ -911,21 +903,21 @@ unsafe fn eval_object(cs: *mut CompileState) {
         eval_expression(cs);
         let _ = put_instruction(cs, OpCommand::reg1(), OpCommand::none(), CmdType::kCmdPop);
         let _ = put_instruction(cs, OpCommand::reg0(), OpCommand::reg1(), CmdType::kCmdSetMapValue);
-        if (*cs).mToken.mTokenValue != TokenValue::COMMA {
+        if cs.mToken.mTokenValue != TokenValue::COMMA {
             break;
         }
     }
     next_token(cs);
 }
 
-unsafe fn eval_array(cs: *mut CompileState) {
-    if (*cs).mToken.mTokenValue != TokenValue::ARRAY_BEGIN {
+unsafe fn eval_array(cs: &mut CompileState) {
+    if cs.mToken.mTokenValue != TokenValue::ARRAY_BEGIN {
         eval_object(cs);
         return;
     }
     let _ = put_instruction(cs, OpCommand::reg0(), OpCommand::none(), CmdType::kCmdCreateArray);
     next_token(cs);
-    if (*cs).mToken.mTokenValue == TokenValue::ARRAY_END {
+    if cs.mToken.mTokenValue == TokenValue::ARRAY_END {
         return;
     }
     putback(cs);
@@ -934,15 +926,15 @@ unsafe fn eval_array(cs: *mut CompileState) {
         eval_expression(cs);
         let _ = put_instruction(cs, OpCommand::reg1(), OpCommand::none(), CmdType::kCmdPop);
         let _ = put_instruction(cs, OpCommand::reg0(), OpCommand::reg1(), CmdType::kCmdAddArrayItem);
-        if (*cs).mToken.mTokenValue != TokenValue::COMMA {
+        if cs.mToken.mTokenValue != TokenValue::COMMA {
             break;
         }
     }
 }
 
-unsafe fn eval_assignment(cs: *mut CompileState) {
+unsafe fn eval_assignment(cs: &mut CompileState) {
     eval_array(cs);
-    if (*cs).mToken.mTokenValue != TokenValue::ASSIGN {
+    if cs.mToken.mTokenValue != TokenValue::ASSIGN {
         return;
     }
     let _ = put_instruction(cs, OpCommand::reg0(), OpCommand::none(), CmdType::kCmdPush);
@@ -954,8 +946,8 @@ unsafe fn eval_assignment(cs: *mut CompileState) {
 
 /// Collect capture candidates for current anonymous function scope from the immediate parent scope:
 /// parent function params + all parent local scopes' locals.
-unsafe fn collect_parent_scope_captures_for_anonym(cs: *mut CompileState) {
-    let scope_len = (*cs).mFunctionScopes.len();
+unsafe fn collect_parent_scope_captures_for_anonym(cs: &mut CompileState) {
+    let scope_len = cs.mFunctionScopes.len();
     println!("call collect_parent_scope_captures_for_anonym scope_len={}", scope_len);
     if scope_len < 2 {
         return;
@@ -966,21 +958,21 @@ unsafe fn collect_parent_scope_captures_for_anonym(cs: *mut CompileState) {
     // rust编译器升级之后，不能直接使用原始指针获取mFunctionScopes了，而必须加&来借用，
     // 这是因为，新的编译器加入了dangerous_implicit_autorefs的缘故，也可以给函数标注宏
     // 来关闭这个lint，例如#[allow(dangerous_implicit_autorefs)]
-    let parent_params = (&(*cs).mFunctionScopes)[parent_idx].mParams.clone();
+    let parent_params = (&cs.mFunctionScopes)[parent_idx].mParams.clone();
     for key in parent_params {
-        if let Some(current) = (*cs).mFunctionScopes.last_mut() {
+        if let Some(current) = cs.mFunctionScopes.last_mut() {
             if !current.mCaptures.iter().any(|&k| k == key) {
                 current.add_capture(key);
             }
         }
     }
-    let parent_scopes_len = (&(*cs).mFunctionScopes)[parent_idx].mLocalScopes.len();
+    let parent_scopes_len = (&cs.mFunctionScopes)[parent_idx].mLocalScopes.len();
     for si in 0..parent_scopes_len {
-        let locals = (&(&(*cs).mFunctionScopes)[parent_idx].mLocalScopes)[si]
+        let locals = (&(&cs.mFunctionScopes)[parent_idx].mLocalScopes)[si]
             .mLocals
             .clone();
         for key in locals {
-            if let Some(current) = (*cs).mFunctionScopes.last_mut() {
+            if let Some(current) = cs.mFunctionScopes.last_mut() {
                 if !current.mCaptures.iter().any(|&k| k == key) {
                     current.add_capture(key);
                 }
@@ -989,9 +981,9 @@ unsafe fn collect_parent_scope_captures_for_anonym(cs: *mut CompileState) {
     }
 }
 
-unsafe fn anonym_fun_statement(cs: *mut CompileState) {
+unsafe fn anonym_fun_statement(cs: &mut CompileState) {
     next_token(cs);
-    if (*cs).mToken.mTokenValue != TokenValue::LPTR {
+    if cs.mToken.mTokenValue != TokenValue::LPTR {
         return;
     }
     let _ = put_instruction(cs, OpCommand::none(), OpCommand::const_number(TokenValue::BY_ANONYM_FUNC as LIntPtr), CmdType::kCmdCreateFunction);
@@ -1001,13 +993,13 @@ unsafe fn anonym_fun_statement(cs: *mut CompileState) {
     collect_parent_scope_captures_for_anonym(cs);
     body_statement(cs, true);
     let end_idx = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdIfEnd).unwrap_or(0);
-    patch_offset(cs_vm(cs), logic_idx, true, (end_idx as LIntPtr).wrapping_sub(logic_idx as LIntPtr));
+    patch_offset(cs.mVm, logic_idx, true, (end_idx as LIntPtr).wrapping_sub(logic_idx as LIntPtr));
     let _ = put_instruction(cs, OpCommand::reg0(), OpCommand::none(), CmdType::kCmdPop);
     let _ = put_instruction(cs, OpCommand::reg0(), OpCommand::none(), CmdType::kCmdSetAnonym);
 }
 
-unsafe fn eval_anonym_func(cs: *mut CompileState) -> bool {
-    if (*cs).mToken.mTokenType == TokenType::KEYWORD && (*cs).mToken.mTokenValue == TokenValue::BY_FUNC {
+unsafe fn eval_anonym_func(cs: &mut CompileState) -> bool {
+    if cs.mToken.mTokenType == TokenType::KEYWORD && cs.mToken.mTokenValue == TokenValue::BY_FUNC {
         anonym_fun_statement(cs);
         next_token(cs);
         return true;
@@ -1015,30 +1007,30 @@ unsafe fn eval_anonym_func(cs: *mut CompileState) -> bool {
     false
 }
 
-unsafe fn eval_await(cs: *mut CompileState) {
+unsafe fn eval_await(cs: &mut CompileState) {
     next_token(cs);
     atom(cs);
     let _ = put_instruction(cs, OpCommand::reg0(), OpCommand::none(), CmdType::kCmdAwait);
 }
 
-unsafe fn eval_expression(cs: *mut CompileState) {
+unsafe fn eval_expression(cs: &mut CompileState) {
     next_token(cs);
-    if (*cs).mToken.mTokenValue == TokenValue::BY_AWAIT {
+    if cs.mToken.mTokenValue == TokenValue::BY_AWAIT {
         eval_await(cs);
         return;
     }
     if eval_anonym_func(cs) {
         return;
     }
-    if (*cs).mToken.mTokenValue == TokenValue::SEMI {
+    if cs.mToken.mTokenValue == TokenValue::SEMI {
         return;
     }
     eval_assignment(cs);
 }
 
 /// GlobalStatement(cs) per BoyiaCore.cpp: type = mToken; do { NextToken; PutInstruction(DeclGlobal); Putback; EvalExpression; } while (COMMA); if != SEMI SntxError.
-unsafe fn global_statement(cs: *mut CompileState) {
-    let type_val = (*cs).mToken.mTokenValue;
+unsafe fn global_statement(cs: &mut CompileState) {
+    let type_val = cs.mToken.mTokenValue;
     loop {
         next_token(cs); /* get ident */
         let name_key = gen_identifier(cs);
@@ -1050,25 +1042,25 @@ unsafe fn global_statement(cs: *mut CompileState) {
         );
         putback(cs);
         eval_expression(cs);
-        if (*cs).mToken.mTokenValue != TokenValue::COMMA {
+        if cs.mToken.mTokenValue != TokenValue::COMMA {
             break;
         }
     }
-    if (*cs).mToken.mTokenValue != TokenValue::SEMI {
+    if cs.mToken.mTokenValue != TokenValue::SEMI {
         sntx_error_build(SntxError::SemiExpected, cs);
     }
 }
 
 /// LocalStatement: strictly matches BoyiaCore.cpp. type = cs->mToken.mTokenValue; do { NextToken; PutInstruction(DeclLocal, type, GenIdentifier); Putback; EvalExpression; } while (mToken.mTokenValue == COMMA); if (mToken.mTokenValue != SEMI) SntxErrorBuild(SEMI_EXPECTED).
-unsafe fn local_statement(cs: *mut CompileState) {
-    let type_val = (*cs).mToken.mTokenValue;
+unsafe fn local_statement(cs: &mut CompileState) {
+    let type_val = cs.mToken.mTokenValue;
     loop {
         next_token(cs);
-        if (*cs).mToken.mTokenType != TokenType::IDENTIFIER {
+        if cs.mToken.mTokenType != TokenType::IDENTIFIER {
             break;
         }
         let name_key = gen_identifier(cs);
-        if let Some(fs) = (*cs).mFunctionScopes.last_mut() {
+        if let Some(fs) = cs.mFunctionScopes.last_mut() {
             fs.add_local(name_key);
         }
         let _ = put_instruction(
@@ -1079,18 +1071,18 @@ unsafe fn local_statement(cs: *mut CompileState) {
         );
         putback(cs);
         eval_expression(cs);
-        if (*cs).mToken.mTokenValue != TokenValue::COMMA {
+        if cs.mToken.mTokenValue != TokenValue::COMMA {
             break;
         }
     }
-    if (*cs).mToken.mTokenValue != TokenValue::SEMI {
+    if cs.mToken.mTokenValue != TokenValue::SEMI {
         sntx_error_build(SntxError::SemiExpected, cs);
     }
 }
 
-unsafe fn return_statement(cs: *mut CompileState) {
+unsafe fn return_statement(cs: &mut CompileState) {
     next_token(cs);
-    if (*cs).mToken.mTokenValue != TokenValue::SEMI && (*cs).mToken.mTokenType != TokenType::KEYWORD && (*cs).mToken.mTokenValue != TokenValue::BY_END {
+    if cs.mToken.mTokenValue != TokenValue::SEMI && cs.mToken.mTokenType != TokenType::KEYWORD && cs.mToken.mTokenValue != TokenValue::BY_END {
         putback(cs);
         eval_expression(cs);
     }
@@ -1098,50 +1090,48 @@ unsafe fn return_statement(cs: *mut CompileState) {
 }
 
 /// BreakStatement per BoyiaCore.cpp: PutInstruction(kBoyiaNull, kBoyiaNull, kCmdBreak, cs); no NextToken.
-unsafe fn break_statement(cs: *mut CompileState) {
+unsafe fn break_statement(cs: &mut CompileState) {
     let _ = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdBreak);
 }
 
-unsafe fn if_statement(cs: *mut CompileState) {
+unsafe fn if_statement(cs: &mut CompileState) {
     next_token(cs);
     eval_expression(cs);
     let logic_idx = put_instruction(cs, OpCommand::reg0(), OpCommand::none(), CmdType::kCmdJmpTrue).unwrap_or(0);
     block_statement(cs);
     let end_idx = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdIfEnd).unwrap_or(0);
-    patch_offset(cs_vm(cs), logic_idx, true, (end_idx as LIntPtr).wrapping_sub(logic_idx as LIntPtr));
+    patch_offset(cs.mVm, logic_idx, true, (end_idx as LIntPtr).wrapping_sub(logic_idx as LIntPtr));
 }
 
-unsafe fn else_statement(cs: *mut CompileState) {
+unsafe fn else_statement(cs: &mut CompileState) {
     let logic_idx = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdElse).unwrap_or(0);
     block_statement(cs);
     let end_idx = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdElEnd).unwrap_or(0);
-    patch_offset(cs_vm(cs), logic_idx, true, (end_idx as LIntPtr).wrapping_sub(logic_idx as LIntPtr));
+    patch_offset(cs.mVm, logic_idx, true, (end_idx as LIntPtr).wrapping_sub(logic_idx as LIntPtr));
 }
 
-unsafe fn while_statement(cs: *mut CompileState) {
+unsafe fn while_statement(cs: &mut CompileState) {
     let begin_idx = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdLoop).unwrap_or(0);
     next_token(cs);
     eval_expression(cs);
     let logic_idx = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdLoopTrue).unwrap_or(0);
     block_statement(cs);
     let end_idx = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdJmpTo).unwrap_or(0);
-    let vm = cs_vm(cs);
-    patch_offset(vm, begin_idx, false, (end_idx as LIntPtr).wrapping_sub(begin_idx as LIntPtr));
-    patch_offset(vm, logic_idx, true, (end_idx as LIntPtr).wrapping_sub(logic_idx as LIntPtr));
-    patch_offset(vm, end_idx, false, (end_idx as LIntPtr).wrapping_sub(begin_idx as LIntPtr));
+    patch_offset(cs.mVm, begin_idx, false, (end_idx as LIntPtr).wrapping_sub(begin_idx as LIntPtr));
+    patch_offset(cs.mVm, logic_idx, true, (end_idx as LIntPtr).wrapping_sub(logic_idx as LIntPtr));
+    patch_offset(cs.mVm, end_idx, false, (end_idx as LIntPtr).wrapping_sub(begin_idx as LIntPtr));
 }
 
-unsafe fn do_statement(cs: *mut CompileState) {
+unsafe fn do_statement(cs: &mut CompileState) {
     let begin_idx = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdLoop).unwrap_or(0);
     block_statement(cs);
     next_token(cs);
     eval_expression(cs);
     let logic_idx = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdLoopTrue).unwrap_or(0);
     let end_idx = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdJmpTo).unwrap_or(0);
-    let vm = cs_vm(cs);
-    patch_offset(vm, begin_idx, false, (end_idx as LIntPtr).wrapping_sub(begin_idx as LIntPtr));
-    patch_offset(vm, logic_idx, true, (end_idx as LIntPtr).wrapping_sub(logic_idx as LIntPtr));
-    patch_offset(vm, end_idx, false, (end_idx as LIntPtr).wrapping_sub(begin_idx as LIntPtr));
+    patch_offset(cs.mVm, begin_idx, false, (end_idx as LIntPtr).wrapping_sub(begin_idx as LIntPtr));
+    patch_offset(cs.mVm, logic_idx, true, (end_idx as LIntPtr).wrapping_sub(logic_idx as LIntPtr));
+    patch_offset(cs.mVm, end_idx, false, (end_idx as LIntPtr).wrapping_sub(begin_idx as LIntPtr));
 }
 
 /// ForStatement(cs) per BoyiaCore.cpp: NextToken('('); require LPTR; NextToken;
@@ -1150,14 +1140,14 @@ unsafe fn do_statement(cs: *mut CompileState) {
 /// lastInst=kCmdJmpTo, lastInst->mOPLeft=(lastInst-beginInst); logicInst->mOPLeft=(lastInst-logicInst);
 /// BlockStatement; endInst=kCmdJmpTo; beginInst->mOPLeft=(endInst-beginInst);
 /// logicInst->mOPRight=(endInst-logicInst); endInst->mOPLeft=(endInst-logicInst).
-unsafe fn for_statement(cs: *mut CompileState) {
+unsafe fn for_statement(cs: &mut CompileState) {
     next_token(cs); // '('
-    if (*cs).mToken.mTokenValue != TokenValue::LPTR {
+    if cs.mToken.mTokenValue != TokenValue::LPTR {
         sntx_error_build(SntxError::LptrExpected, cs);
     }
     next_token(cs);
     // First expression
-    if (*cs).mToken.mTokenValue == TokenValue::BY_VAR {
+    if cs.mToken.mTokenValue == TokenValue::BY_VAR {
         local_statement(cs);
     } else {
         putback(cs);
@@ -1169,18 +1159,17 @@ unsafe fn for_statement(cs: *mut CompileState) {
     let logic_idx = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdLoopTrue).unwrap_or(0);
     // Third expression (e.g. i++)
     eval_expression(cs);
-    if (*cs).mToken.mTokenValue != TokenValue::RPTR {
+    if cs.mToken.mTokenValue != TokenValue::RPTR {
         sntx_error_build(SntxError::RptrExpected, cs);
     }
     let last_idx = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdJmpTo).unwrap_or(0);
-    let vm = cs_vm(cs);
-    patch_offset(vm, last_idx, false, (last_idx as LIntPtr).wrapping_sub(begin_idx as LIntPtr));
-    patch_offset(vm, logic_idx, false, (last_idx as LIntPtr).wrapping_sub(logic_idx as LIntPtr));
+    patch_offset(cs.mVm, last_idx, false, (last_idx as LIntPtr).wrapping_sub(begin_idx as LIntPtr));
+    patch_offset(cs.mVm, logic_idx, false, (last_idx as LIntPtr).wrapping_sub(logic_idx as LIntPtr));
     block_statement(cs);
     let end_idx = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdJmpTo).unwrap_or(0);
-    patch_offset(vm, begin_idx, false, (end_idx as LIntPtr).wrapping_sub(begin_idx as LIntPtr));
-    patch_offset(vm, logic_idx, true, (end_idx as LIntPtr).wrapping_sub(logic_idx as LIntPtr));
-    patch_offset(vm, end_idx, false, (end_idx as LIntPtr).wrapping_sub(logic_idx as LIntPtr));
+    patch_offset(cs.mVm, begin_idx, false, (end_idx as LIntPtr).wrapping_sub(begin_idx as LIntPtr));
+    patch_offset(cs.mVm, logic_idx, true, (end_idx as LIntPtr).wrapping_sub(logic_idx as LIntPtr));
+    patch_offset(cs.mVm, end_idx, false, (end_idx as LIntPtr).wrapping_sub(logic_idx as LIntPtr));
 }
 
 /// BlockStatement: parse block {} contents. Matches C++ BlockStatement exactly.
@@ -1189,41 +1178,42 @@ unsafe fn for_statement(cs: *mut CompileState) {
 ///
 /// When compiling inside a [FunctionScope], each `{` pushes a [LocalScope] and each matching `}` pops it
 /// (nested blocks stack). Class / file-level [body_statement] with no active function skips push/pop.
-unsafe fn block_statement(cs: *mut CompileState) {
+unsafe fn block_statement(cs: &mut CompileState) {
     let mut block = false;
     loop {
         next_token(cs);
-        if (*cs).mToken.mTokenType == TokenType::IDENTIFIER {
+        if cs.mToken.mTokenType == TokenType::IDENTIFIER {
             putback(cs);
             eval_expression(cs);
-            if (*cs).mToken.mTokenValue != TokenValue::SEMI {
+            if cs.mToken.mTokenValue != TokenValue::SEMI {
                 sntx_error_build(SntxError::SemiExpected, cs);
             }
-        } else if (*cs).mToken.mTokenValue == TokenValue::BLOCK_START {
+        } else if cs.mToken.mTokenValue == TokenValue::BLOCK_START {
             block = true;
-            if let Some(fs) = (*cs).mFunctionScopes.last_mut() {
+            if let Some(fs) = cs.mFunctionScopes.last_mut() {
                 fs.push_local_scope();
             }
-        } else if (*cs).mToken.mTokenValue == TokenValue::BLOCK_END {
-            if let Some(fs) = (*cs).mFunctionScopes.last_mut() {
-                let n = fs
-                    .mLocalScopes
-                    .last()
-                    .map(|ls| ls.mLocals.len())
-                    .unwrap_or(0);
-                if n > 0 {
-                    let _ = put_instruction(
-                        cs,
-                        OpCommand::const_number(n as LIntPtr),
-                        OpCommand::none(),
-                        CmdType::kCmdPopLocals,
-                    );
-                }
+        } else if cs.mToken.mTokenValue == TokenValue::BLOCK_END {
+            let pop_n = cs
+                .mFunctionScopes
+                .last()
+                .and_then(|fs| fs.mLocalScopes.last())
+                .map(|ls| ls.mLocals.len())
+                .unwrap_or(0);
+            if pop_n > 0 {
+                let _ = put_instruction(
+                    cs,
+                    OpCommand::const_number(pop_n as LIntPtr),
+                    OpCommand::none(),
+                    CmdType::kCmdPopLocals,
+                );
+            }
+            if let Some(fs) = cs.mFunctionScopes.last_mut() {
                 let _ = fs.pop_local_scope();
             }
             return; // C++ sets block = LFalse then return; we skip the dead assign
-        } else if (*cs).mToken.mTokenType == TokenType::KEYWORD {
-            let v = (*cs).mToken.mTokenValue;
+        } else if cs.mToken.mTokenType == TokenType::KEYWORD {
+            let v = cs.mToken.mTokenValue;
             if v == TokenValue::BY_VAR {
                 local_statement(cs);
             } else if v == TokenValue::BY_FUNC || v == TokenValue::BY_ASYNC {
@@ -1250,7 +1240,7 @@ unsafe fn block_statement(cs: *mut CompileState) {
             }
         }
         // C++: } while (cs->mToken.mTokenValue != BY_END && block);
-        if (*cs).mToken.mTokenValue == TokenValue::BY_END || !block {
+        if cs.mToken.mTokenValue == TokenValue::BY_END || !block {
             break;
         }
     }
@@ -1267,10 +1257,10 @@ unsafe fn block_statement(cs: *mut CompileState) {
 /// In Rust, mCmds is embedded (no pointer switch); we clear mCmds when isFunction to simulate tmpTable.
 /// Restore mBegin/mEnd only when isFunction. Restore mEnd to the ExecCreate instruction (not the pre-ExecCreate end)
 /// so that the next instruction (e.g. CreateClass) is linked after ExecCreate and does not overwrite ParamCreate->mNext.
-unsafe fn body_statement(cs: *mut CompileState, is_function: bool) {
+unsafe fn body_statement(cs: &mut CompileState, is_function: bool) {
     // CommandTable* cmds = cs->mCmds;
-    let saved_begin = (*cs).mCmds.mBegin;
-    let _saved_end = (*cs).mCmds.mEnd;
+    let saved_begin = cs.mCmds.mBegin;
+    let _saved_end = cs.mCmds.mEnd;
     // CommandTable tmpTable = { kBoyiaNull, kBoyiaNull }; Instruction* funInst = kBoyiaNull;
     let (fun_inst_idx, exec_create_end): (Option<usize>, LIntPtr) = if is_function {
         // if (isFunction) { funInst = PutInstruction(ExecCreate); cs->mCmds = &tmpTable; }
@@ -1280,7 +1270,7 @@ unsafe fn body_statement(cs: *mut CompileState, is_function: bool) {
             OpCommand::const_number(-1),
             CmdType::kCmdExecCreate,
         );
-        let exec_create_end = (*cs).mCmds.mEnd; // save ExecCreate as chain end before clearing
+        let exec_create_end = cs.mCmds.mEnd; // save ExecCreate as chain end before clearing
         create_executor(cs);
         (idx, exec_create_end)
     } else {
@@ -1290,23 +1280,22 @@ unsafe fn body_statement(cs: *mut CompileState, is_function: bool) {
     block_statement(cs);
     // if (funInst && tmpTable.mBegin) { patch funInst; }
     if let Some(fun_idx) = fun_inst_idx {
-        let tmp_begin = (*cs).mCmds.mBegin;
-        let tmp_end = (*cs).mCmds.mEnd;
+        let tmp_begin = cs.mCmds.mBegin;
+        let tmp_end = cs.mCmds.mEnd;
         if tmp_begin >= 0 && tmp_end >= 0 {
-            let vm = cs_vm(cs);
-            patch_offset(vm, fun_idx, false, tmp_begin);
-            patch_offset(vm, fun_idx, true, tmp_end);
+            patch_offset(cs.mVm, fun_idx, false, tmp_begin);
+            patch_offset(cs.mVm, fun_idx, true, tmp_end);
         }
     }
     // cs->mCmds = cmds; when isFunction restore so next instruction links after ExecCreate
     if is_function {
-        (*cs).mCmds.mBegin = saved_begin;
-        (*cs).mCmds.mEnd = exec_create_end; // restore end to ExecCreate, not saved_end (ParamCreate)
-        let _ = (*cs).mFunctionScopes.pop();
+        cs.mCmds.mBegin = saved_begin;
+        cs.mCmds.mEnd = exec_create_end; // restore end to ExecCreate, not saved_end (ParamCreate)
+        let _ = cs.mFunctionScopes.pop();
     }
 }
 
-unsafe fn fun_statement(cs: *mut CompileState, fun_type: ValueType) {
+unsafe fn fun_statement(cs: &mut CompileState, fun_type: ValueType) {
     next_token(cs);
     let name_key = gen_identifier(cs);
     // Match C++ FunStatement: only emit instruction; runtime HandleFunCreate creates slot / global.
@@ -1321,9 +1310,9 @@ unsafe fn fun_statement(cs: *mut CompileState, fun_type: ValueType) {
     body_statement(cs, true);
 }
 
-unsafe fn prop_statement(cs: *mut CompileState) {
+unsafe fn prop_statement(cs: &mut CompileState) {
     next_token(cs);
-    if (*cs).mToken.mTokenType == TokenType::IDENTIFIER {
+    if cs.mToken.mTokenType == TokenType::IDENTIFIER {
         let name_key = gen_identifier(cs);
         let _ = put_instruction(
             cs,
@@ -1333,15 +1322,15 @@ unsafe fn prop_statement(cs: *mut CompileState) {
         );
         putback(cs);
         eval_expression(cs);
-        if (*cs).mToken.mTokenValue != TokenValue::SEMI {
+        if cs.mToken.mTokenValue != TokenValue::SEMI {
             sntx_error_build(SntxError::SemiExpected, cs);
         }
         return;
     }
-    if (*cs).mToken.mTokenType == TokenType::KEYWORD {
-        if (*cs).mToken.mTokenValue == TokenValue::BY_FUNC {
+    if cs.mToken.mTokenType == TokenType::KEYWORD {
+        if cs.mToken.mTokenValue == TokenValue::BY_FUNC {
             fun_statement(cs, ValueType::BY_PROP_FUNC);
-        } else if (*cs).mToken.mTokenValue == TokenValue::BY_ASYNC {
+        } else if cs.mToken.mTokenValue == TokenValue::BY_ASYNC {
             fun_statement(cs, ValueType::BY_ASYNC_PROP);
         }
     } else {
@@ -1354,7 +1343,7 @@ unsafe fn prop_statement(cs: *mut CompileState) {
 /// NextToken; if (BY_EXTEND) NextToken, extendKey = GenIdentifier; else Putback(cs);
 /// BodyStatement(cs, LFalse); if (extendKey) PutInstruction(&cmd, &extendCmd, kCmdClassExtend);
 /// PutInstruction(&cmdEnd, kBoyiaNull, kCmdCreateClass) so CLASS is set to kBoyiaNull.
-unsafe fn class_statement(cs: *mut CompileState) {
+unsafe fn class_statement(cs: &mut CompileState) {
     next_token(cs);
     let class_key = gen_identifier(cs);
     let _ = put_instruction(
@@ -1365,7 +1354,7 @@ unsafe fn class_statement(cs: *mut CompileState) {
     );
 
     next_token(cs);
-    let extend_key: LUintPtr = if (*cs).mToken.mTokenValue == TokenValue::BY_EXTEND {
+    let extend_key: LUintPtr = if cs.mToken.mTokenValue == TokenValue::BY_EXTEND {
         next_token(cs);
         gen_identifier(cs)
     } else {
@@ -1387,66 +1376,67 @@ unsafe fn class_statement(cs: *mut CompileState) {
     let _ = put_instruction(cs, OpCommand::none(), OpCommand::none(), CmdType::kCmdCreateClass);
 }
 
-unsafe fn parse_statement(cs: *mut CompileState) {
+unsafe fn parse_statement(cs: &mut CompileState) {
     create_executor(cs);
     let mut brace: LInt = 0;
     loop {
         while brace > 0 {
             next_token(cs);
-            if (*cs).mToken.mTokenValue == TokenValue::BLOCK_START {
+            if cs.mToken.mTokenValue == TokenValue::BLOCK_START {
                 brace += 1;
             }
-            if (*cs).mToken.mTokenValue == TokenValue::BLOCK_END {
+            if cs.mToken.mTokenValue == TokenValue::BLOCK_END {
                 brace -= 1;
             }
         }
         next_token(cs);
-        if (*cs).mToken.mTokenValue == TokenValue::BY_END {
+        if cs.mToken.mTokenValue == TokenValue::BY_END {
             break;
         }
-        if (*cs).mToken.mTokenValue == TokenValue::BY_VAR {
+        if cs.mToken.mTokenValue == TokenValue::BY_VAR {
             global_statement(cs);
-        } else if (*cs).mToken.mTokenValue == TokenValue::BY_FUNC {
+        } else if cs.mToken.mTokenValue == TokenValue::BY_FUNC {
             fun_statement(cs, ValueType::BY_FUNC);
-        } else if (*cs).mToken.mTokenValue == TokenValue::BY_CLASS {
+        } else if cs.mToken.mTokenValue == TokenValue::BY_CLASS {
             class_statement(cs);
-        } else if (*cs).mToken.mTokenType == TokenType::IDENTIFIER {
+        } else if cs.mToken.mTokenType == TokenType::IDENTIFIER {
             putback(cs);
             eval_expression(cs);
-            if (*cs).mToken.mTokenValue != TokenValue::SEMI {
+            if cs.mToken.mTokenValue != TokenValue::SEMI {
                 sntx_error_build(SntxError::SemiExpected, cs);
             }
-        } else if (*cs).mToken.mTokenValue == TokenValue::BLOCK_START {
+        } else if cs.mToken.mTokenValue == TokenValue::BLOCK_START {
             brace += 1;
         }
     }
     // Nested compile / execute global (match ParseStatement after do-while).
-    let vm = cs_vm(cs);
-    let es = vm.mEState;
+    let es = cs.mVm.mEState;
     if !es.is_null() && !(*es).mStackFrame.mContext.is_null() {
-        let state = crate::core::create_exec_state(vm);
-        crate::core::switch_exec_state(state, vm);
+        let state = crate::core::create_exec_state(cs.mVm);
+        crate::core::switch_exec_state(state, cs.mVm);
     }
-    if !vm.mEState.is_null() {
-        (*vm.mEState).mStackFrame.mContext = &mut (*cs).mCmds as *mut CommandTable;
-        crate::execute::execute_code(vm);
-    }
-    if vm.mEState != es && !es.is_null() {
-        crate::core::destroy_exec_state(vm.mEState, vm);
-        crate::core::switch_exec_state(es, vm);
+    {
+        if !cs.mVm.mEState.is_null() {
+            let cmds = &mut cs.mCmds as *mut CommandTable;
+            (*cs.mVm.mEState).mStackFrame.mContext = cmds;
+            crate::execute::execute_code(cs.mVm);
+        }
+        if cs.mVm.mEState != es && !es.is_null() {
+            crate::core::destroy_exec_state(cs.mVm.mEState, cs.mVm);
+            crate::core::switch_exec_state(es, cs.mVm);
+        }
     }
     append_entry(cs);
 }
 
 /// Debug: dump compiled instruction opcodes (when BOYIA_DEBUG_COMPILE=1).
-unsafe fn dump_compiled_opcodes(cs: *const CompileState) {
-    let vm = cs_vm(cs as *mut CompileState);
-    let mut pc_idx = (*cs).mCmds.mBegin;
+unsafe fn dump_compiled_opcodes(cs: &mut CompileState) {
+    let mut pc_idx = cs.mCmds.mBegin;
     let mut n = 0usize;
     let mut n_call_native = 0usize;
     let mut n_after_last_call_native = 0usize;
     while pc_idx >= 0 {
-        let inst = get_instruction_mut(vm, pc_idx as usize);
+        let inst = get_instruction_mut(cs.mVm, pc_idx as usize);
         if inst.is_null() {
             break;
         }
@@ -1485,12 +1475,12 @@ pub(crate) unsafe fn parse_and_register(code: *mut LInt8, vm: &mut BoyiaVM) {
             mTokenType: TokenType::NONE,
             mTokenValue: TokenValue::NONE,
         },
-        mVm: vm as *mut BoyiaVM,
+        mVm: vm,
         mCmds: CommandTable::new(),
         mFunctionScopes: Vec::new(),
     };
     parse_statement(&mut cs);
     if std::env::var("BOYIA_DEBUG_COMPILE").is_ok() {
-        dump_compiled_opcodes(&cs);
+        dump_compiled_opcodes(&mut cs);
     }
 }

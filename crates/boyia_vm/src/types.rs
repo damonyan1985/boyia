@@ -478,12 +478,12 @@ impl Default for FunctionScope {
 }
 
 /// Compile state: matches BoyiaCore.cpp CompileState (plus Rust-only [FunctionScope] stack for nested functions / [OpType::OP_LOCAL]).
-pub(crate) struct CompileState {
+pub(crate) struct CompileState<'a> {
     pub mProg: *mut LInt8,
     pub mLineNum: LInt,
     pub mColumnNum: LInt,
     pub mToken: BoyiaToken,
-    pub mVm: *mut BoyiaVM,
+    pub mVm: &'a mut BoyiaVM,
     pub mCmds: CommandTable,
     /// Innermost = currently compiling function (same role as former `m_scope_stack`).
     pub mFunctionScopes: Vec<FunctionScope>,
