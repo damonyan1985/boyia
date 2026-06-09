@@ -9,4 +9,4 @@ mod info;
 mod runtime;
 
 pub use id_creator::IdCreator;
-pub use runtime::BoyiaRuntime;
+pub use runtime::{boyia_runtime_from_vm, BoyiaRuntime};

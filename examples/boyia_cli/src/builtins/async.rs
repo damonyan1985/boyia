@@ -1,19 +1,71 @@
-//! Shared helpers for thread-pool → runtime async builtins (File, Https, Zip).
+//! Async builtin infrastructure: VM `unsafe` is confined here.
+//! Business modules (`file` / `https` / `zip`) use [CallSite], [AsyncCtx], [ScriptCallback] only.
 
-use crate::runner::BoyiaRunner;
-use boyia_runtime::BoyiaRuntime;
-use boyia_vm::{copy_object, create_global_class, create_native_string, create_string_object, gen_identifier_from_str,
-    get_function_count, native_call_impl, value_copy, vector_params_grow_if_full, set_native_result, vm_from_void,
-    BoyiaClass, BoyiaFunction,
-    BoyiaStr, BoyiaValue, BuiltinId, Global, K_BOYIA_NULL, RealValue, Runtime, ValueType, LInt, LInt8, LIntPtr,
-    LUintPtr, LVoid, BoyiaVM};
+use boyia_builtins::gen_builtin_class_function;
+use boyia_runtime::{boyia_runtime_from_vm, BoyiaRuntime};
+use boyia_vm::{
+    copy_object, create_global_class, create_native_string, create_string_object, gen_identifier_from_str,
+    get_function_count, get_local_size, get_local_value, native_call_impl, set_int_result, value_copy,
+    vector_params_grow_if_full, set_native_result, vm_from_void, BoyiaClass, BoyiaFunction, BoyiaStr,
+    BoyiaValue, BuiltinId, Global, K_BOYIA_NULL, NativePtr, OpHandleResult, RealValue, Runtime, ValueType,
+    LInt, LInt8, LIntPtr, LUintPtr, BoyiaVM,
+};
+use crate::run_loop::RunLoopHandle;
+use crate::thread_pool::ThreadPool;
 use std::str;
+use std::sync::Weak;
 
-/// Slot in [BoyiaFunction::mParams] where `File` / `Https` / `Zip` store `BoyiaRunner*` as `BY_INT`.
-pub const BUILTIN_CLASS_RUNNER_PROP_INDEX: usize = 0;
+/// Stored on [BoyiaRuntime] via embedder during CLI init.
+#[derive(Clone)]
+pub struct CliEmbedder {
+    pub async_ctx: AsyncCtx,
+}
 
-/// Result posted to script callbacks: a Map with `status` (`"ok"` | `"fail"`),
-/// optional `data` (only when ok and non-empty payload), optional `message` (only when fail).
+/// Safe handle for scheduling thread-pool work and posting callbacks to the Boyia task thread.
+#[derive(Clone)]
+pub struct AsyncCtx {
+    runtime_handle: RunLoopHandle<Box<BoyiaRuntime>>,
+    thread_pool: Weak<ThreadPool>,
+}
+
+impl AsyncCtx {
+    pub fn new(runtime_handle: RunLoopHandle<Box<BoyiaRuntime>>, thread_pool: Weak<ThreadPool>) -> Self {
+        Self {
+            runtime_handle,
+            thread_pool,
+        }
+    }
+
+    pub fn spawn<W, H>(&self, work: W, callback: ScriptCallback, before_callback: H) -> bool
+    where
+        W: FnOnce() -> AsyncBuiltinResult + Send + 'static,
+        H: FnOnce(&AsyncBuiltinResult) + Send + 'static,
+    {
+        let Some(thread_pool) = self.thread_pool.upgrade() else {
+            return false;
+        };
+        let runtime_handle = self.runtime_handle.clone();
+        let cb = callback.0;
+        thread_pool
+            .post_task(move || {
+                let body = work();
+                let _ = runtime_handle.post_task(move |runtime| {
+                    before_callback(&body);
+                    unsafe {
+                        callback_async_result(body, cb, runtime.as_mut());
+                    }
+                    runtime.consume_micro_task();
+                });
+            })
+            .is_ok()
+    }
+}
+
+/// Opaque script callback token (VM details live inside [CallbackInfo]).
+#[derive(Clone)]
+pub struct ScriptCallback(CallbackInfo);
+
+/// Result posted to script callbacks: a Map with `status`, optional `data` / `message`.
 #[derive(Debug)]
 pub enum AsyncBuiltinResult {
     Ok { data: Option<String> },
@@ -21,7 +73,6 @@ pub enum AsyncBuiltinResult {
 }
 
 impl AsyncBuiltinResult {
-    /// Short string for logging (e.g. HTTPS response body or error text).
     pub fn log_preview(&self) -> &str {
         match self {
             AsyncBuiltinResult::Ok { data: Some(d) } => d.as_str(),
@@ -31,43 +82,93 @@ impl AsyncBuiltinResult {
     }
 }
 
-/// Append a `runner` [ValueType::BY_INT] param on `class_body` at [BoyiaFunction::mParamSize] (stores `runner_ptr`).
-/// Returns false if `class_body` or [BoyiaFunction::mParams] is null.
-pub unsafe fn install_runner_param_slot<F>(
-    class_body: *mut BoyiaFunction,
+/// Safe view of VM locals for one native call.
+pub struct CallSite<'a> {
+    vm: &'a mut BoyiaVM,
+    size: LInt,
+    ctx: AsyncCtx,
+}
+
+impl<'a> CallSite<'a> {
+    pub fn open(vm: &'a mut BoyiaVM, min_locals: LInt) -> Option<Self> {
+        let size = unsafe { get_local_size(vm) };
+        if size < min_locals {
+            return None;
+        }
+        let ctx = async_ctx_from_vm(vm)?;
+        Some(Self { vm, size, ctx })
+    }
+
+    pub fn ctx(&self) -> &AsyncCtx {
+        &self.ctx
+    }
+
+    pub fn arg_string(&mut self, index: LInt) -> Option<String> {
+        let val = unsafe { get_local_value(index, self.vm) as *const BoyiaValue };
+        value_to_string(val)
+    }
+
+    /// Optional middle arg: use `default` when `index` is absent (e.g. Zip password with 5 locals).
+    pub fn arg_string_or(&mut self, index: LInt, default: &str) -> String {
+        if self.size > index {
+            self.arg_string(index).unwrap_or_else(|| default.to_string())
+        } else {
+            default.to_string()
+        }
+    }
+
+    /// Callback is always the local immediately before `this` (`size - 2`).
+    pub fn callback(&mut self) -> Option<ScriptCallback> {
+        let index = self.size - 2;
+        let val = unsafe { get_local_value(index, self.vm) as *const BoyiaValue };
+        unsafe { make_callback_info(self.vm, val) }.map(ScriptCallback)
+    }
+
+    pub fn finish(&mut self, scheduled: bool) -> OpHandleResult {
+        unsafe {
+            set_int_result(if scheduled { 1 } else { 0 }, self.vm);
+        }
+        OpHandleResult::kOpResultSuccess
+    }
+}
+
+fn async_ctx_from_vm(vm: &mut BoyiaVM) -> Option<AsyncCtx> {
+    unsafe {
+        boyia_runtime_from_vm(vm)?
+            .embedder::<CliEmbedder>()
+            .map(|e| e.async_ctx.clone())
+    }
+}
+
+pub fn async_dispatch(
+    vm: &mut BoyiaVM,
+    min_locals: LInt,
+    handler: fn(&mut CallSite<'_>) -> OpHandleResult,
+) -> OpHandleResult {
+    let Some(mut site) = CallSite::open(vm, min_locals) else {
+        return OpHandleResult::kOpResultEnd;
+    };
+    handler(&mut site)
+}
+
+pub fn attach_method<F>(
     gen_id: &mut F,
-    runner_ptr: *mut BoyiaRunner,
-) -> bool
-where
+    name: &str,
+    native: NativePtr,
+    class_body: *mut BoyiaFunction,
+    vm: &mut BoyiaVM,
+) where
     F: FnMut(&str) -> LUintPtr,
 {
-    if class_body.is_null() || (*class_body).mParams.is_null() {
-        return false;
+    unsafe {
+        gen_builtin_class_function(gen_id(name), native, class_body, vm);
     }
-    let runner_slot = (*class_body).mParams.add((*class_body).mParamSize as usize);
-    (*runner_slot).mValueType = ValueType::BY_INT;
-    (*runner_slot).mNameKey = gen_id("runner");
-    (*runner_slot).mValue.mIntVal = runner_ptr as LIntPtr;
-    (*class_body).mParamSize += 1;
-    true
 }
 
-/// Read the runner pointer from the builtin class value (`get_local_value(size - 1, vm)` in native methods).
-pub unsafe fn runner_from_class(class_val: *const BoyiaValue) -> *mut BoyiaRunner {
-    let class_body = (*class_val).mValue.mObj.mPtr as *mut BoyiaFunction;
-    (*class_body)
-        .mParams
-        .add(BUILTIN_CLASS_RUNNER_PROP_INDEX)
-        .read()
-        .mValue
-        .mIntVal as *mut BoyiaRunner
-}
-
-/// Create global class `class_name`, set `mSuper`, [install_runner_param_slot], then `register(class_body, vm, gen_id)` for native methods.
-pub fn register_runner_builtin_class<F, R>(
+/// Create global class and register native methods (no runner field on the class).
+pub fn register_async_builtin_class<F, R>(
     vm: &mut BoyiaVM,
     gen_id: &mut F,
-    runner_ptr: *mut BoyiaRunner,
     class_name: &str,
     mut register: R,
 ) where
@@ -82,66 +183,40 @@ pub fn register_runner_builtin_class<F, R>(
     unsafe {
         (*class_ref).mValue.mObj.mSuper = K_BOYIA_NULL;
         let class_body = (*class_ref).mValue.mObj.mPtr as *mut BoyiaFunction;
-        if !install_runner_param_slot(class_body, gen_id, runner_ptr) {
-            return;
-        }
         register(class_body, vm, gen_id);
     }
 }
 
-/// Persistent callback + object handle for posting a result Map back onto the runtime thread.
+#[macro_export]
+macro_rules! define_async_native {
+    ($native:ident, $min:expr, $handler:ident) => {
+        unsafe fn $native(vm: &mut boyia_vm::BoyiaVM) -> boyia_vm::OpHandleResult {
+            $crate::builtins::r#async::async_dispatch(vm, $min, $handler)
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! some_or_end {
+    ($e:expr) => {
+        match $e {
+            Some(value) => value,
+            None => return boyia_vm::OpHandleResult::kOpResultEnd,
+        }
+    };
+}
+
 #[derive(Clone, Copy)]
-pub struct CallbackInfo {
-    pub name_key: LUintPtr,
-    pub value_type: ValueType,
-    pub func_ptr: LIntPtr,
-    /// Persistent Global node for the object; [Global::value] holds the [BoyiaValue] whose mValue.mObj.mPtr is the object address from the callback.
-    pub object_global: *mut Global,
+struct CallbackInfo {
+    name_key: LUintPtr,
+    value_type: ValueType,
+    func_ptr: LIntPtr,
+    object_global: *mut Global,
 }
 
 unsafe impl Send for CallbackInfo {}
 
-/// Run `work` on the runner's thread pool; then post to the runtime thread: `before_callback`,
-/// then [callback_async_result]. Returns whether the task was queued on the pool.
-///
-/// `on_missing_runner` runs only when the runner pointer cannot yield a runtime handle / pool.
-pub fn schedule_task<W, H, M>(
-    runner_ptr: *mut BoyiaRunner,
-    work: W,
-    callback: CallbackInfo,
-    before_callback: H,
-    on_missing_runner: M,
-) -> bool
-where
-    W: FnOnce() -> AsyncBuiltinResult + Send + 'static,
-    H: FnOnce(&AsyncBuiltinResult) + Send + 'static,
-    M: FnOnce(),
-{
-    let Some((runtime_handle, thread_pool_weak)) =
-        (unsafe { BoyiaRunner::get_handle_and_pool_from_ptr(runner_ptr) })
-    else {
-        on_missing_runner();
-        return false;
-    };
-    let Some(thread_pool) = thread_pool_weak.upgrade() else {
-        return false;
-    };
-
-    thread_pool
-        .post_task(move || {
-            let body = work();
-            let _ = runtime_handle.post_task(move |runtime| {
-                before_callback(&body);
-                unsafe {
-                    callback_async_result(body, callback, runtime.as_mut());
-                }
-                runtime.consume_micro_task();
-            });
-        })
-        .is_ok()
-}
-
-pub fn value_to_string(value: *const BoyiaValue) -> Option<String> {
+fn value_to_string(value: *const BoyiaValue) -> Option<String> {
     if value.is_null() {
         return None;
     }
@@ -155,7 +230,7 @@ pub fn value_to_string(value: *const BoyiaValue) -> Option<String> {
     str::from_utf8(slice).ok().map(ToOwned::to_owned)
 }
 
-pub unsafe fn make_callback_info(vm: &mut BoyiaVM, callback_val: *const BoyiaValue) -> Option<CallbackInfo> {
+unsafe fn make_callback_info(vm: &mut BoyiaVM, callback_val: *const BoyiaValue) -> Option<CallbackInfo> {
     if callback_val.is_null() {
         return None;
     }
@@ -190,11 +265,8 @@ unsafe fn native_string_value(vm: &mut BoyiaVM, s: &str) -> Option<BoyiaValue> {
     if s.is_empty() {
         let body = create_string_object(std::ptr::null_mut(), 0, vm);
         if body.is_null() {
-            println!("native_string_value body null");
             return None;
         }
-
-        println!("native_string_value str is null");
         return Some(BoyiaValue {
             mNameKey: BuiltinId::kBoyiaString.as_key(),
             mValueType: ValueType::BY_CLASS,
@@ -207,12 +279,8 @@ unsafe fn native_string_value(vm: &mut BoyiaVM, s: &str) -> Option<BoyiaValue> {
         });
     }
     let boxed = s.as_bytes().to_vec().into_boxed_slice();
-
-    
     let len = boxed.len() as LInt;
     let ptr = Box::into_raw(boxed) as *mut u8 as *mut LInt8;
-
-    //println!("native_string_value str is : {}, len: {}, ptr: {:?}", s, len, ptr);
     let mut value = BoyiaValue {
         mNameKey: 0,
         mValueType: ValueType::BY_INT,
@@ -220,7 +288,6 @@ unsafe fn native_string_value(vm: &mut BoyiaVM, s: &str) -> Option<BoyiaValue> {
     };
     create_native_string(&mut value, ptr, len, vm);
     if value.mValue.mObj.mPtr == K_BOYIA_NULL {
-        println!("native_string_value str is null");
         return None;
     }
     Some(value)
@@ -248,8 +315,7 @@ unsafe fn map_put_str_key(vm: &mut BoyiaVM, map_obj: *mut BoyiaValue, key: &str,
     true
 }
 
-/// Build a Map `BoyiaValue` for script: `status`, and optionally `data` / `message` per rules above.
-pub unsafe fn build_async_result_map(vm: &mut BoyiaVM, r: &AsyncBuiltinResult) -> Option<BoyiaValue> {
+unsafe fn build_async_result_map(vm: &mut BoyiaVM, r: &AsyncBuiltinResult) -> Option<BoyiaValue> {
     let raw = copy_object(BuiltinId::kBoyiaMap.as_key(), 32, vm);
     if raw.is_null() {
         return None;
@@ -264,15 +330,12 @@ pub unsafe fn build_async_result_map(vm: &mut BoyiaVM, r: &AsyncBuiltinResult) -
             },
         },
     };
-
     set_native_result(&mut map_val, vm);
 
     let status_s = match r {
         AsyncBuiltinResult::Ok { .. } => "ok",
         AsyncBuiltinResult::Fail { .. } => "fail",
     };
-
-    println!("build_async_result_map status: {}", status_s);
     let status_val = native_string_value(vm, status_s)?;
     if !map_put_str_key(vm, &mut map_val, "status", &status_val) {
         return None;
@@ -280,7 +343,6 @@ pub unsafe fn build_async_result_map(vm: &mut BoyiaVM, r: &AsyncBuiltinResult) -
 
     match r {
         AsyncBuiltinResult::Ok { data: Some(d) } => {
-            println!("build_async_result_map data: {}", &d);
             let dv = native_string_value(vm, d)?;
             if !map_put_str_key(vm, &mut map_val, "data", &dv) {
                 return None;
@@ -288,19 +350,16 @@ pub unsafe fn build_async_result_map(vm: &mut BoyiaVM, r: &AsyncBuiltinResult) -
         }
         AsyncBuiltinResult::Ok { data: None } => {}
         AsyncBuiltinResult::Fail { message } => {
-            
             let mv = native_string_value(vm, message)?;
             if !map_put_str_key(vm, &mut map_val, "message", &mv) {
                 return None;
             }
         }
     }
-
     Some(map_val)
 }
 
-/// Invoke `callback(result_map)` on the runtime thread; releases persistent object if any.
-pub unsafe fn callback_async_result(
+unsafe fn callback_async_result(
     result: AsyncBuiltinResult,
     callback: CallbackInfo,
     runtime: &mut BoyiaRuntime,
@@ -360,7 +419,7 @@ pub unsafe fn callback_async_result(
             },
         },
     };
-    native_call_impl(args.as_mut_ptr(), 2, &mut obj, vm_from_void(vm_ptr).expect("runtime VM"));
+    native_call_impl(args.as_mut_ptr(), 2, &mut obj, vm);
 
     if !callback.object_global.is_null() {
         runtime.remove_persistent(callback.object_global);

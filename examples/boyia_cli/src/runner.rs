@@ -1,13 +1,12 @@
 //! Runner wrapper that binds BoyiaRuntime to a dedicated TaskThread.
-//! All runtime operations are posted onto the task thread so BoyiaRuntime
-//! stays on a single thread for its whole lifetime.
 
 #![allow(dead_code)]
 
+use crate::builtins::r#async::{AsyncCtx, CliEmbedder};
 use crate::builtins::file::builtin_file_class;
 use crate::builtins::https::builtin_https_class;
 use crate::builtins::zip::builtin_zip_class;
-use crate::run_loop::{RunLoopError, RunLoopHandle};
+use crate::run_loop::RunLoopError;
 use crate::task_thread::TaskThread;
 use crate::thread_pool::ThreadPool;
 use boyia_runtime::BoyiaRuntime;
@@ -22,8 +21,6 @@ pub struct BoyiaRunner {
 }
 
 impl BoyiaRunner {
-    /// Create a runner and initialize BoyiaRuntime on the task thread before the run loop starts.
-    /// Returns a box so the Https class can hold a raw pointer to the same runner.
     pub fn create() -> Box<Self> {
         let (ready_tx, ready_rx) = mpsc::channel();
 
@@ -43,45 +40,30 @@ impl BoyiaRunner {
             ready,
         };
         let runner_box = Box::new(runner);
-        let runner_ptr_usize = runner_box.as_ref() as *const BoyiaRunner as usize;
+
+        let async_ctx = AsyncCtx::new(
+            runner_box.boyia_thread.as_ref().unwrap().handle(),
+            Arc::downgrade(runner_box.thread_pool.as_ref().unwrap()),
+        );
 
         let (init_tx, init_rx) = mpsc::channel();
-        let _ = runner_box
-            .boyia_thread
-            .as_ref()
-            .unwrap()
-            .post_task(move |runtime| {
-                let runtime = runtime.as_mut();
-                let runner_ptr = runner_ptr_usize as *mut BoyiaRunner;
-                let _ = runtime.with_vm_and_id_creator(|vm, id_creator| {
-                    let mut gen_id = |s: &str| id_creator.gen_ident_by_str(s);
-                    builtin_https_class(vm, &mut gen_id, runner_ptr);
-                    builtin_file_class(vm, &mut gen_id, runner_ptr);
-                    builtin_zip_class(vm, &mut gen_id, runner_ptr);
-                });
-                let _ = init_tx.send(());
+        let embedder = CliEmbedder {
+            async_ctx: async_ctx.clone(),
+        };
+        let _ = runner_box.boyia_thread.as_ref().unwrap().post_task(move |runtime| {
+            let runtime = runtime.as_mut();
+            runtime.set_embedder(embedder);
+            let _ = runtime.with_vm_and_id_creator(|vm, id_creator| {
+                let mut gen_id = |s: &str| id_creator.gen_ident_by_str(s);
+                builtin_https_class(vm, &mut gen_id);
+                builtin_file_class(vm, &mut gen_id);
+                builtin_zip_class(vm, &mut gen_id);
             });
+            let _ = init_tx.send(());
+        });
         let _ = init_rx.recv();
 
         runner_box
-    }
-
-    /// Get handle and thread pool from a runner pointer (Https/File async builtins). Returns None if pointer is null or runner is not fully initialized.
-    pub unsafe fn get_handle_and_pool_from_ptr(
-        runner: *mut BoyiaRunner,
-    ) -> Option<(RunLoopHandle<Box<BoyiaRuntime>>, std::sync::Weak<ThreadPool>)> {
-        if runner.is_null() {
-            return None;
-        }
-        (*runner).handle_and_pool()
-    }
-
-    fn handle_and_pool(
-        &self,
-    ) -> Option<(RunLoopHandle<Box<BoyiaRuntime>>, std::sync::Weak<ThreadPool>)> {
-        let handle = self.boyia_thread.as_ref()?.handle();
-        let pool = Arc::downgrade(self.thread_pool.as_ref()?);
-        Some((handle, pool))
     }
 
     pub fn is_ready(&self) -> bool {
@@ -98,7 +80,6 @@ impl BoyiaRunner {
             .post_task(move |runtime| task(runtime.as_mut()))
     }
 
-    /// Compile source. If `entry_script` is set, relative `BY_Require` at runtime resolves against that file's directory.
     pub fn compile(
         &self,
         script: &str,
@@ -143,7 +124,6 @@ impl Drop for BoyiaRunner {
     fn drop(&mut self) {
         std::thread::sleep(std::time::Duration::from_secs(10));
 
-        // 等待线程池中任务执行完，将异步任务投递到主线程
         if let Some(thread_pool) = self.thread_pool.take() {
             let _ = thread_pool.stop();
             if let Ok(thread_pool) = Arc::try_unwrap(thread_pool) {
@@ -151,7 +131,6 @@ impl Drop for BoyiaRunner {
             }
         }
 
-        // 等待主线程任务执行完，再退出主线程
         if let Some(ref boyia_thread) = self.boyia_thread {
             let _ = boyia_thread.stop();
         }

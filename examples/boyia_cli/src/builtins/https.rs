@@ -1,15 +1,13 @@
-//! Https builtin class for `boyia_cli`.
-//! Requests run on `ThreadPool`; callbacks are posted back to the runtime task thread.
+//! Https builtin: requests on thread pool, callbacks on Boyia task thread.
 
 #![allow(dead_code)]
 
 use super::r#async::{
-    make_callback_info, register_runner_builtin_class, runner_from_class, schedule_task, value_to_string,
-    AsyncBuiltinResult, CallbackInfo,
+    attach_method, register_async_builtin_class, AsyncBuiltinResult, AsyncCtx, CallSite, ScriptCallback,
 };
-use boyia_builtins::gen_builtin_class_function;
-use boyia_vm::{get_local_size, get_local_value, set_int_result, BoyiaValue, NativePtr, LUintPtr, LVoid,
-    OpHandleResult, BoyiaVM};
+use crate::define_async_native;
+use crate::some_or_end;
+use boyia_vm::{LUintPtr, OpHandleResult, BoyiaVM};
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
@@ -17,30 +15,23 @@ use std::time::Duration;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
-/// Register the Https builtin class. Stores `runner_ptr` as a BY_INT prop on the class so load/request can get the runner and schedule callbacks.
-pub fn builtin_https_class<F>(vm: &mut BoyiaVM, gen_id: &mut F, runner_ptr: *mut crate::runner::BoyiaRunner)
+pub fn builtin_https_class<F>(vm: &mut BoyiaVM, gen_id: &mut F)
 where
     F: FnMut(&str) -> LUintPtr,
 {
-    register_runner_builtin_class(vm, gen_id, runner_ptr, "Https", |class_body, vm, gen_id| unsafe {
-        gen_builtin_class_function(gen_id("load"), https_load_impl as NativePtr, class_body, vm);
-        gen_builtin_class_function(
-            gen_id("request"),
-            https_request_impl as NativePtr,
-            class_body,
-            vm,
-        );
+    register_async_builtin_class(vm, gen_id, "Https", |class_body, vm, gen_id| {
+        attach_method(gen_id, "load", https_load_native, class_body, vm);
+        attach_method(gen_id, "request", https_request_native, class_body, vm);
     });
 }
 
 fn schedule_request(
-    runner_ptr: *mut crate::runner::BoyiaRunner,
+    ctx: &AsyncCtx,
     url: String,
     params: Option<String>,
-    callback: CallbackInfo,
+    callback: ScriptCallback,
 ) -> bool {
-    schedule_task(
-        runner_ptr,
+    ctx.spawn(
         move || match execute_https_request(&url, params.as_deref()) {
             Ok(text) => {
                 if text.is_empty() {
@@ -57,7 +48,6 @@ fn schedule_request(
         },
         callback,
         |r| println!("https result: {}", r.log_preview()),
-        || (),
     )
 }
 
@@ -116,54 +106,18 @@ fn execute_https_request(url: &str, params: Option<&str>) -> Result<String, Stri
         .map_err(|err| err.to_string())
 }
 
-unsafe fn https_load_impl(vm: &mut BoyiaVM) -> OpHandleResult {
-    let size = get_local_size(vm);
-    if size < 3 {
-        return OpHandleResult::kOpResultEnd;
-    }
-
-    let class_val = get_local_value(size - 1, vm) as *const BoyiaValue;
-    let runner_ptr = runner_from_class(class_val);
-
-    let url_val = get_local_value(1, vm) as *const BoyiaValue;
-    let callback_val = get_local_value(2, vm) as *const BoyiaValue;
-
-    let Some(url) = value_to_string(url_val) else {
-        return OpHandleResult::kOpResultEnd;
-    };
-    let Some(callback) = make_callback_info(vm, callback_val) else {
-        return OpHandleResult::kOpResultEnd;
-    };
-
-    let scheduled = schedule_request(runner_ptr, url, None, callback);
-    set_int_result(if scheduled { 1 } else { 0 }, vm);
-    OpHandleResult::kOpResultSuccess
+fn https_load_handler(site: &mut CallSite<'_>) -> OpHandleResult {
+    let url = some_or_end!(site.arg_string(1));
+    let callback = some_or_end!(site.callback());
+    site.finish(schedule_request(site.ctx(), url, None, callback))
 }
 
-unsafe fn https_request_impl(vm: &mut BoyiaVM) -> OpHandleResult {
-    let size = get_local_size(vm);
-    if size < 4 {
-        return OpHandleResult::kOpResultEnd;
-    }
-
-    let class_val = get_local_value(size - 1, vm) as *const BoyiaValue;
-    let runner_ptr = runner_from_class(class_val);
-
-    let url_val = get_local_value(1, vm) as *const BoyiaValue;
-    let params_val = get_local_value(2, vm) as *const BoyiaValue;
-    let callback_val = get_local_value(3, vm) as *const BoyiaValue;
-
-    let Some(url) = value_to_string(url_val) else {
-        return OpHandleResult::kOpResultEnd;
-    };
-    let Some(params) = value_to_string(params_val) else {
-        return OpHandleResult::kOpResultEnd;
-    };
-    let Some(callback) = make_callback_info(vm, callback_val) else {
-        return OpHandleResult::kOpResultEnd;
-    };
-
-    let scheduled = schedule_request(runner_ptr, url, Some(params), callback);
-    set_int_result(if scheduled { 1 } else { 0 }, vm);
-    OpHandleResult::kOpResultSuccess
+fn https_request_handler(site: &mut CallSite<'_>) -> OpHandleResult {
+    let url = some_or_end!(site.arg_string(1));
+    let params = some_or_end!(site.arg_string(2));
+    let callback = some_or_end!(site.callback());
+    site.finish(schedule_request(site.ctx(), url, Some(params), callback))
 }
+
+define_async_native!(https_load_native, 3, https_load_handler);
+define_async_native!(https_request_native, 4, https_request_handler);

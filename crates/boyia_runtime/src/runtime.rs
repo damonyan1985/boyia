@@ -11,10 +11,11 @@ use boyia_builtins::{
 };
 use boyia_vm::{
     cache_vm_code, consume_micro_task, delete_data, execute_global_code,
-    free_memory_pool, init_memory_pool, init_vm_boxed, new_data, vm_from_void,
+    free_memory_pool, get_runtime_from_vm, init_memory_pool, init_vm_boxed, new_data, vm_from_void,
     BoyiaFunction, BoyiaStr, BoyiaVM, BoyiaValue, Global, GlobalList, K_BOYIA_NULL, LInt, LUintPtr, LVoid,
     NativeFunction, NativePtr, OpHandleResult, Runtime, ValueType,
 };
+use std::any::Any;
 use std::ptr;
 
 const K_NATIVE_FUNCTION_CAPACITY: usize = 100;
@@ -38,6 +39,8 @@ pub struct BoyiaRuntime {
     is_load_exe_file: bool,
     /// Persistent BoyiaValue list; keeps references so objects are not collected.
     persistent_objects: GlobalList,
+    /// Embedder-owned data (e.g. CLI [AsyncCtx]). Not part of C++ port.
+    embedder: Option<Box<dyn Any + Send + Sync>>,
 }
 
 impl BoyiaRuntime {
@@ -53,7 +56,23 @@ impl BoyiaRuntime {
             compile_info: BoyiaCompileInfo::new(),
             is_load_exe_file: false,
             persistent_objects: GlobalList::new(),
+            embedder: None,
         }
+    }
+
+    /// Store embedder data keyed by type (replaces any previous embedder).
+    pub fn set_embedder<T: Any + Send + Sync>(&mut self, data: T) {
+        self.embedder = Some(Box::new(data));
+    }
+
+    /// Borrow embedder data if the type matches.
+    pub fn embedder<T: Any + Send + Sync>(&self) -> Option<&T> {
+        self.embedder.as_ref()?.downcast_ref()
+    }
+
+    /// Mutably borrow embedder data if the type matches.
+    pub fn embedder_mut<T: Any + Send + Sync>(&mut self) -> Option<&mut T> {
+        self.embedder.as_mut()?.downcast_mut()
     }
 
     /// Initialize: create memory pool (BoyiaMemory), then VM with `self` as creator (like C++ BoyiaRuntime ctor). Call after new().
@@ -256,6 +275,15 @@ impl BoyiaRuntime {
             }
         }
     }
+}
+
+/// Recover [BoyiaRuntime] from a VM when the creator is [BoyiaRuntime] (CLI / full runtime).
+pub unsafe fn boyia_runtime_from_vm(vm: &mut BoyiaVM) -> Option<&mut BoyiaRuntime> {
+    let rt = get_runtime_from_vm(vm);
+    if rt.is_null() {
+        return None;
+    }
+    Some(&mut *(rt as *mut BoyiaRuntime))
 }
 
 impl Runtime for BoyiaRuntime {

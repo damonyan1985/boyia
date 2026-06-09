@@ -1,16 +1,13 @@
-//! Zip builtin: compress / extract on [crate::thread_pool::ThreadPool]; callback receives result Map (see `async` module).
-//! Password: AES-256 when non-empty (WinZip-compatible); extract uses `by_index_decrypt` / `by_index`.
+//! Zip builtin: compress / extract on thread pool; callback receives result Map.
 
 #![allow(dead_code)]
 
 use super::r#async::{
-    make_callback_info, register_runner_builtin_class, runner_from_class, schedule_task, value_to_string,
-    AsyncBuiltinResult, CallbackInfo,
+    attach_method, register_async_builtin_class, AsyncBuiltinResult, AsyncCtx, CallSite, ScriptCallback,
 };
-use crate::runner::BoyiaRunner;
-use boyia_builtins::gen_builtin_class_function;
-use boyia_vm::{get_local_size, get_local_value, set_int_result, BoyiaValue, NativePtr, LUintPtr, LVoid,
-    OpHandleResult, BoyiaVM};
+use crate::define_async_native;
+use crate::some_or_end;
+use boyia_vm::{LUintPtr, OpHandleResult, BoyiaVM};
 use std::fs::{self, File};
 use std::io::copy;
 use std::path::{Path, PathBuf};
@@ -19,15 +16,13 @@ use zip::write::{FileOptions, ZipWriter};
 use zip::CompressionMethod;
 use zip::ZipArchive;
 
-/// `Zip.compress` / `Zip.extract`: local **0** = callee, **1..** = args, last = class (`this`).
-/// No password: **5** locals `(callee, src, dest, callback, this)`. With password: **6** `(callee, src, dest, password, callback, this)`.
-pub fn builtin_zip_class<F>(vm: &mut BoyiaVM, gen_id: &mut F, runner_ptr: *mut BoyiaRunner)
+pub fn builtin_zip_class<F>(vm: &mut BoyiaVM, gen_id: &mut F)
 where
     F: FnMut(&str) -> LUintPtr,
 {
-    register_runner_builtin_class(vm, gen_id, runner_ptr, "Zip", |class_body, vm, gen_id| unsafe {
-        gen_builtin_class_function(gen_id("compress"), zip_compress_impl as NativePtr, class_body, vm);
-        gen_builtin_class_function(gen_id("extract"), zip_extract_impl as NativePtr, class_body, vm);
+    register_async_builtin_class(vm, gen_id, "Zip", |class_body, vm, gen_id| {
+        attach_method(gen_id, "compress", zip_compress_native, class_body, vm);
+        attach_method(gen_id, "extract", zip_extract_native, class_body, vm);
     });
 }
 
@@ -215,117 +210,60 @@ fn run_extract(src_zip: PathBuf, dest_dir: PathBuf, password: String) -> AsyncBu
 }
 
 fn schedule_compress(
-    runner_ptr: *mut BoyiaRunner,
+    ctx: &AsyncCtx,
     src: String,
     dest: String,
     password: String,
-    callback: CallbackInfo,
+    callback: ScriptCallback,
 ) -> bool {
-    schedule_task(
-        runner_ptr,
+    ctx.spawn(
         move || run_compress(PathBuf::from(src), PathBuf::from(dest), password),
         callback,
         |_| (),
-        || (),
     )
 }
 
 fn schedule_extract(
-    runner_ptr: *mut BoyiaRunner,
+    ctx: &AsyncCtx,
     src: String,
     dest: String,
     password: String,
-    callback: CallbackInfo,
+    callback: ScriptCallback,
 ) -> bool {
-    schedule_task(
-        runner_ptr,
+    ctx.spawn(
         move || run_extract(PathBuf::from(src), PathBuf::from(dest), password),
         callback,
         |_| (),
-        || (),
     )
 }
 
-/// `Zip.compress(src, destZip, callback)` or `Zip.compress(src, destZip, password, callback)`.
-unsafe fn zip_compress_impl(vm: &mut BoyiaVM) -> OpHandleResult {
-    let size = get_local_size(vm);
-    if size != 5 && size != 6 {
-        return OpHandleResult::kOpResultEnd;
-    }
-
-    let class_val = get_local_value(size - 1, vm) as *const BoyiaValue;
-    let runner_ptr = runner_from_class(class_val);
-
-    let (src_v, dest_v, password, cb_v) = if size == 5 {
-        (
-            get_local_value(1, vm) as *const BoyiaValue,
-            get_local_value(2, vm) as *const BoyiaValue,
-            String::new(),
-            get_local_value(3, vm) as *const BoyiaValue,
-        )
-    } else {
-        (
-            get_local_value(1, vm) as *const BoyiaValue,
-            get_local_value(2, vm) as *const BoyiaValue,
-            value_to_string(get_local_value(3, vm) as *const BoyiaValue).unwrap_or_default(),
-            get_local_value(4, vm) as *const BoyiaValue,
-        )
-    };
-
-    let Some(src) = value_to_string(src_v) else {
-        return OpHandleResult::kOpResultEnd;
-    };
-    let Some(dest) = value_to_string(dest_v) else {
-        return OpHandleResult::kOpResultEnd;
-    };
-    let Some(callback) = make_callback_info(vm, cb_v) else {
-        return OpHandleResult::kOpResultEnd;
-    };
-
-    let scheduled = schedule_compress(runner_ptr, src, dest, password, callback);
-    set_int_result(if scheduled { 1 } else { 0 }, vm);
-    OpHandleResult::kOpResultSuccess
+fn zip_compress_handler(site: &mut CallSite<'_>) -> OpHandleResult {
+    let src = some_or_end!(site.arg_string(1));
+    let dest = some_or_end!(site.arg_string(2));
+    let password = site.arg_string_or(3, "");
+    let callback = some_or_end!(site.callback());
+    site.finish(schedule_compress(
+        site.ctx(),
+        src,
+        dest,
+        password,
+        callback,
+    ))
 }
 
-/// `Zip.extract(srcZip, destDir, callback)` or `Zip.extract(srcZip, destDir, password, callback)`.
-unsafe fn zip_extract_impl(vm: &mut BoyiaVM) -> OpHandleResult {
-    println!("call zip_extract_impl");
-    let size = get_local_size(vm);
-    if size != 5 && size != 6 {
-        return OpHandleResult::kOpResultEnd;
-    }
-
-    let class_val = get_local_value(size - 1, vm) as *const BoyiaValue;
-    let runner_ptr = runner_from_class(class_val);
-
-    println!("call zip_extract_impl1");
-    let (src_v, dest_v, password, cb_v) = if size == 5 {
-        (
-            get_local_value(1, vm) as *const BoyiaValue,
-            get_local_value(2, vm) as *const BoyiaValue,
-            String::new(),
-            get_local_value(3, vm) as *const BoyiaValue,
-        )
-    } else {
-        (
-            get_local_value(1, vm) as *const BoyiaValue,
-            get_local_value(2, vm) as *const BoyiaValue,
-            value_to_string(get_local_value(3, vm) as *const BoyiaValue).unwrap_or_default(),
-            get_local_value(4, vm) as *const BoyiaValue,
-        )
-    };
-
-    let Some(src) = value_to_string(src_v) else {
-        return OpHandleResult::kOpResultEnd;
-    };
-    let Some(dest) = value_to_string(dest_v) else {
-        return OpHandleResult::kOpResultEnd;
-    };
-    let Some(callback) = make_callback_info(vm, cb_v) else {
-        return OpHandleResult::kOpResultEnd;
-    };
-
-    let scheduled = schedule_extract(runner_ptr, src, dest, password, callback);
-    set_int_result(if scheduled { 1 } else { 0 }, vm);
-    OpHandleResult::kOpResultSuccess
+fn zip_extract_handler(site: &mut CallSite<'_>) -> OpHandleResult {
+    let src = some_or_end!(site.arg_string(1));
+    let dest = some_or_end!(site.arg_string(2));
+    let password = site.arg_string_or(3, "");
+    let callback = some_or_end!(site.callback());
+    site.finish(schedule_extract(
+        site.ctx(),
+        src,
+        dest,
+        password,
+        callback,
+    ))
 }
+
+define_async_native!(zip_compress_native, 5, zip_compress_handler);
+define_async_native!(zip_extract_native, 5, zip_extract_handler);
