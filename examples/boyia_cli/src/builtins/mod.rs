@@ -2,6 +2,7 @@
 
 pub mod file;
 pub mod https;
+pub mod json;
 pub mod zip;
 
 use crate::runner::BuiltinRegistrar;
@@ -10,4 +11,5 @@ pub const DEFAULT_BUILTINS: &[BuiltinRegistrar] = &[
     https::builtin_https_class,
     file::builtin_file_class,
     zip::builtin_zip_class,
+    json::builtin_json_builtin_class,
 ];

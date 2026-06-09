@@ -212,6 +212,16 @@ fn json_number_from_real(f: f64) -> JsonValue {
     JsonValue::Number(Number::from_f64(f).unwrap_or_else(|| Number::from(0)))
 }
 
+/// Convert a Boyia value (Map / Array / String / number / null) to [JsonValue].
+pub unsafe fn boyia_value_to_json(vm: &mut BoyiaVM, v: *const BoyiaValue) -> Result<JsonValue, ()> {
+    boyia_to_serde(vm, v)
+}
+
+/// Convert [JsonValue] into a Boyia value.
+pub unsafe fn json_to_boyia_value(vm: &mut BoyiaVM, j: &JsonValue) -> Result<BoyiaValue, ()> {
+    serde_to_boyia(vm, j)
+}
+
 unsafe fn boyia_to_serde(vm: &mut BoyiaVM, v: *const BoyiaValue) -> Result<JsonValue, ()> {
     if v.is_null() {
         return Err(());

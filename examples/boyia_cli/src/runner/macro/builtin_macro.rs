@@ -324,19 +324,62 @@ fn strip_optional_from_func(func: &mut ItemFn) {
     }
 }
 
-fn async_arg_extraction(arg: &ArgInfo) -> proc_macro2::TokenStream {
+fn is_json_value_type(ty: &Type) -> bool {
+    let Type::Path(TypePath { path, .. }) = ty else {
+        return false;
+    };
+    let Some(last) = path.segments.last() else {
+        return false;
+    };
+    if last.ident == "JsonValue" {
+        return true;
+    }
+    last.ident == "Value"
+        && path
+            .segments
+            .first()
+            .is_some_and(|seg| seg.ident == "serde_json")
+}
+
+fn async_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> {
     let name = &arg.name;
     let index = arg.index as i32;
-    if let Some(default) = &arg.optional_default {
-        let default_lit = default.as_str();
-        quote! {
-            let #name = site.arg_string_or(#index, #default_lit);
-        }
-    } else {
-        quote! {
-            let #name = crate::some_or_end!(site.arg_string(#index));
-        }
+
+    if is_json_value_type(&arg.ty) {
+        return Ok(quote! {
+            let #name = {
+                let raw = crate::some_or_end!(site.arg_boyia_value(#index));
+                crate::some_or_end!(unsafe {
+                    boyia_builtins::boyia_value_to_json(site.vm(), raw).ok()
+                })
+            };
+        });
     }
+
+    if arg.optional_default.is_some() {
+        let default = arg.optional_default.as_ref().unwrap();
+        let default_lit = default.as_str();
+        if type_last_ident(&arg.ty).as_deref() != Some("String") {
+            return Err(syn::Error::new_spanned(
+                &arg.ty,
+                "`#[optional]` is only supported on `String` parameters",
+            ));
+        }
+        return Ok(quote! {
+            let #name = site.arg_string_or(#index, #default_lit);
+        });
+    }
+
+    if type_last_ident(&arg.ty).as_deref() != Some("String") {
+        return Err(syn::Error::new_spanned(
+            &arg.ty,
+            "async builtins support `String` or `serde_json::Value` parameters",
+        ));
+    }
+
+    Ok(quote! {
+        let #name = crate::some_or_end!(site.arg_string(#index));
+    })
 }
 
 fn sync_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> {
@@ -441,7 +484,11 @@ fn expand_async_method(config: &AsyncMethodConfig, func: &ItemFn) -> syn::Result
     let args = collect_args(&func)?;
     let min_locals = (args.len() + 2) as i32;
     let arg_names: Vec<_> = args.iter().map(|a| &a.name).collect();
-    let arg_extractions = args.iter().map(async_arg_extraction);
+    let arg_types: Vec<_> = args.iter().map(|a| &a.ty).collect();
+    let arg_extractions: Vec<_> = args
+        .iter()
+        .map(async_arg_extraction)
+        .collect::<Result<_, _>>()?;
 
     let before_cb = match &config.before {
         Some(path) => quote! { #path },
@@ -453,7 +500,7 @@ fn expand_async_method(config: &AsyncMethodConfig, func: &ItemFn) -> syn::Result
 
         fn #schedule_name(
             ctx: &crate::runner::r#async::AsyncCtx,
-            #( #arg_names: String, )*
+            #( #arg_names: #arg_types, )*
             callback: crate::runner::r#async::ScriptCallback,
         ) -> bool {
             ctx.spawn(

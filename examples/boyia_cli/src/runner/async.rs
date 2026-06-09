@@ -1,7 +1,7 @@
 //! Async builtin infrastructure: VM `unsafe` is confined here.
 //! Business modules (`file` / `https` / `zip`) use [CallSite], [AsyncCtx], [ScriptCallback] only.
 
-use boyia_builtins::gen_builtin_class_function;
+use boyia_builtins::{gen_builtin_class_function, json_to_boyia_value};
 use boyia_runtime::{boyia_runtime_from_vm, BoyiaRuntime};
 use boyia_vm::{
     copy_object, create_global_class, create_native_string, create_string_object, gen_identifier_from_str,
@@ -69,6 +69,8 @@ pub struct ScriptCallback(CallbackInfo);
 #[derive(Debug)]
 pub enum AsyncBuiltinResult {
     Ok { data: Option<String> },
+    /// Parsed JSON converted to a Boyia Map/Array/String/number on the VM thread.
+    OkJson(serde_json::Value),
     Fail { message: String },
 }
 
@@ -77,6 +79,7 @@ impl AsyncBuiltinResult {
         match self {
             AsyncBuiltinResult::Ok { data: Some(d) } => d.as_str(),
             AsyncBuiltinResult::Ok { data: None } => "",
+            AsyncBuiltinResult::OkJson(_) => "<json>",
             AsyncBuiltinResult::Fail { message } => message.as_str(),
         }
     }
@@ -101,6 +104,19 @@ impl<'a> CallSite<'a> {
 
     pub fn ctx(&self) -> &AsyncCtx {
         &self.ctx
+    }
+
+    pub fn vm(&mut self) -> &mut BoyiaVM {
+        self.vm
+    }
+
+    pub fn arg_boyia_value(&mut self, index: LInt) -> Option<*const BoyiaValue> {
+        let val = unsafe { get_local_value(index, self.vm) as *const BoyiaValue };
+        if val.is_null() {
+            None
+        } else {
+            Some(val)
+        }
     }
 
     pub fn arg_string(&mut self, index: LInt) -> Option<String> {
@@ -293,6 +309,28 @@ unsafe fn native_string_value(vm: &mut BoyiaVM, s: &str) -> Option<BoyiaValue> {
     Some(value)
 }
 
+unsafe fn map_put_boyia_key(vm: &mut BoyiaVM, map_obj: *mut BoyiaValue, key: &str, val: &BoyiaValue) -> bool {
+    let fun = (*map_obj).mValue.mObj.mPtr as *mut BoyiaFunction;
+    if fun.is_null() || (*fun).mParams.is_null() {
+        return false;
+    }
+    let kb = key.as_bytes();
+    let bstr = BoyiaStr {
+        mPtr: kb.as_ptr() as *mut LInt8,
+        mLen: kb.len() as LInt,
+    };
+    let key_id = gen_identifier_from_str(vm, &bstr);
+    let cap = get_function_count(fun);
+    if (*fun).mParamSize >= cap && !vector_params_grow_if_full(fun, vm) {
+        return false;
+    }
+    let slot = (*fun).mParams.add((*fun).mParamSize as usize);
+    value_copy(slot, val);
+    (*slot).mNameKey = key_id;
+    (*fun).mParamSize += 1;
+    true
+}
+
 unsafe fn map_put_str_key(vm: &mut BoyiaVM, map_obj: *mut BoyiaValue, key: &str, val: &BoyiaValue) -> bool {
     let fun = (*map_obj).mValue.mObj.mPtr as *mut BoyiaFunction;
     if fun.is_null() || (*fun).mParams.is_null() {
@@ -333,7 +371,7 @@ unsafe fn build_async_result_map(vm: &mut BoyiaVM, r: &AsyncBuiltinResult) -> Op
     set_native_result(&mut map_val, vm);
 
     let status_s = match r {
-        AsyncBuiltinResult::Ok { .. } => "ok",
+        AsyncBuiltinResult::Ok { .. } | AsyncBuiltinResult::OkJson(_) => "ok",
         AsyncBuiltinResult::Fail { .. } => "fail",
     };
     let status_val = native_string_value(vm, status_s)?;
@@ -349,6 +387,15 @@ unsafe fn build_async_result_map(vm: &mut BoyiaVM, r: &AsyncBuiltinResult) -> Op
             }
         }
         AsyncBuiltinResult::Ok { data: None } => {}
+        AsyncBuiltinResult::OkJson(j) => {
+            let mut bv = match json_to_boyia_value(vm, j) {
+                Ok(v) => v,
+                Err(_) => return None,
+            };
+            if !map_put_boyia_key(vm, &mut map_val, "data", &mut bv) {
+                return None;
+            }
+        }
         AsyncBuiltinResult::Fail { message } => {
             let mv = native_string_value(vm, message)?;
             if !map_put_str_key(vm, &mut map_val, "message", &mv) {

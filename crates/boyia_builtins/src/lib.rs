@@ -87,4 +87,4 @@ pub use array::{builtin_array_class, create_array_object};
 // ---------------------------------------------------------------------------
 // Json builtin (json.rs)
 // ---------------------------------------------------------------------------
-pub use json::builtin_json_class;
+pub use json::{builtin_json_class, boyia_value_to_json, json_to_boyia_value};
