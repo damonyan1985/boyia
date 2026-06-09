@@ -263,15 +263,12 @@ impl Runtime for BoyiaRuntime {
         self.memory_pool
     }
 
-    fn gc_ptr(&self) -> *mut LVoid {
-        self.gc as *mut LVoid
-    }
     fn vm_ptr(&self) -> *mut LVoid {
         BoyiaRuntime::vm_ptr(self)
     }
 
     fn gc_append_ref(&self, address: *mut LVoid, type_: boyia_vm::ValueType) {
-        boyia_gc::gc_append_ref(address, type_, self);
+        boyia_gc::gc_append_ref(address, type_, self.gc);
     }
 
     fn create_runtime_to_memory(&self, _vm: &mut BoyiaVM) -> *mut LVoid {

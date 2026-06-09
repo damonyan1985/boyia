@@ -67,12 +67,10 @@ pub trait Runtime {
     /// Switch runtime to use to_pool after compaction (UpdateRuntimeMemory / changeMemoryPool).
     fn update_runtime_memory(&mut self, to_pool: *mut LVoid, vm: &mut BoyiaVM);
 
-    /// Register a heap object with the GC (GCAppendRef). GC and VM are obtained from [Runtime::gc_ptr] / [Runtime::vm_ptr]. Implemented by [BoyiaRuntime]; no-op for other runtimes.
+    /// Register a heap object with the GC (GCAppendRef). Implemented by [BoyiaRuntime]; no-op for other runtimes.
     fn gc_append_ref(&self, _address: *mut LVoid, _type_: ValueType);
 
-    /// GC state pointer (for [boyia_gc::gc_append_ref]).
-    fn gc_ptr(&self) -> *mut LVoid;
-    /// VM pointer (for GC / runtime).
+    /// VM pointer (for GC / runtime boundaries).
     fn vm_ptr(&self) -> *mut LVoid;
 
     /// Store a copy of the given [BoyiaValue] in the runtime's persistent object list and return a pointer to the list node ([Global]).

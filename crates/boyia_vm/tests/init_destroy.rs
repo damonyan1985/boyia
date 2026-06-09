@@ -30,9 +30,6 @@ impl Runtime for TestRuntime {
     }
     fn update_runtime_memory(&mut self, _to_pool: *mut std::ffi::c_void, _vm: &mut boyia_vm::BoyiaVM) {}
     fn gc_append_ref(&self, _address: *mut std::ffi::c_void, _type: ValueType) {}
-    fn gc_ptr(&self) -> *mut std::ffi::c_void {
-        ptr::null_mut()
-    }
     fn vm_ptr(&self) -> *mut std::ffi::c_void {
         ptr::null_mut()
     }

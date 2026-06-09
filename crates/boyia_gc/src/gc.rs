@@ -11,7 +11,7 @@ use boyia_memory::{
 use boyia_vm::{
     get_function_count, get_global_table, get_local_stack, get_native_helper_result, get_native_result,
     get_runtime_from_vm, get_string_buffer_from_body, iterate_micro_task, BoyiaFunction, BoyiaVM,
-    BoyiaValue, BuiltinId, LInt, LIntPtr, LVoid, Runtime, ValueType, LUint8,
+    BoyiaValue, BuiltinId, LInt, LIntPtr, LVoid, ValueType, LUint8,
 };
 use std::ptr;
 
@@ -166,9 +166,7 @@ pub unsafe fn destroy_gc(gc: *mut BoyiaGc) {
 }
 
 /// GCAppendRef: register a heap object with the GC (BY_CLASS or BY_NAVCLASS).
-/// GC and VM are obtained from the given [Runtime].
-pub fn gc_append_ref(address: *mut LVoid, type_: ValueType, runtime: &dyn Runtime) {
-    let gc = runtime.gc_ptr() as *mut BoyiaGc;
+pub fn gc_append_ref(address: *mut LVoid, type_: ValueType, gc: *mut BoyiaGc) {
     if gc.is_null() {
         return;
     }
