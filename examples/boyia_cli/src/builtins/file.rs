@@ -30,8 +30,10 @@ fn path_exists_result(path: &str) -> AsyncBuiltinResult {
     }
 }
 
+struct FileBuiltins;
+
 #[boyia_class(name = "File", registrar = builtin_file_class)]
-mod file_builtins {
+impl FileBuiltins {
     #[boyia_async_builtin(native = file_read_native, method = "read")]
     fn file_read(path: String) -> AsyncBuiltinResult {
         match fs::read_to_string(&path) {

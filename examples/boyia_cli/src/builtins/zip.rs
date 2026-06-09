@@ -195,8 +195,10 @@ fn run_extract(src_zip: PathBuf, dest_dir: PathBuf, password: String) -> AsyncBu
     AsyncBuiltinResult::Ok { data: None }
 }
 
+struct ZipBuiltins;
+
 #[boyia_class(name = "Zip", registrar = builtin_zip_class)]
-mod zip_builtins {
+impl ZipBuiltins {
     #[boyia_async_builtin(native = zip_compress_native, method = "compress")]
     fn zip_compress(
         src: String,

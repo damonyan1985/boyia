@@ -5,8 +5,8 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{format_ident, quote};
 use syn::{
-    parse::Parse, parse_macro_input, token::Comma, Attribute, Expr, ExprLit, FnArg, Item, ItemFn,
-    ItemMod, Lit, LitStr, Meta, Pat, PatType, Type, TypePath,
+    parse::Parse, parse_macro_input, token::Comma, Attribute, Expr, ExprLit, FnArg, ImplItem,
+    ImplItemFn, ItemFn, ItemImpl, Lit, LitStr, Meta, Pat, PatType, Type, TypePath,
 };
 
 struct ClassConfig {
@@ -505,29 +505,43 @@ fn expand_sync_method(config: &SyncMethodConfig, func: &ItemFn) -> syn::Result<p
     })
 }
 
-fn expand_class(class_config: &ClassConfig, module: &ItemMod) -> syn::Result<proc_macro2::TokenStream> {
-    let items = module
-        .content
-        .as_ref()
-        .map(|(_, items)| items.as_slice())
-        .ok_or_else(|| {
-            syn::Error::new_spanned(module, "`#[boyia_class]` requires an inline module body")
-        })?;
+fn impl_fn_to_item_fn(method: &ImplItemFn) -> syn::Result<ItemFn> {
+    if method.sig.receiver().is_some() {
+        return Err(syn::Error::new_spanned(
+            method.sig.receiver(),
+            "`#[boyia_class]` methods must be associated functions without `self`",
+        ));
+    }
+    Ok(ItemFn {
+        attrs: method.attrs.clone(),
+        vis: method.vis.clone(),
+        sig: method.sig.clone(),
+        block: Box::new(method.block.clone()),
+    })
+}
+
+fn expand_class(class_config: &ClassConfig, imp: &ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
+    if imp.trait_.is_some() {
+        return Err(syn::Error::new_spanned(
+            imp,
+            "`#[boyia_class]` requires an inherent `impl Type { ... }`, not a trait impl",
+        ));
+    }
 
     let mut method_expansions = Vec::new();
     let mut attach_calls = Vec::new();
 
-    for item in items {
-        let Item::Fn(func) = item else {
+    for item in &imp.items {
+        let ImplItem::Fn(method) = item else {
             return Err(syn::Error::new_spanned(
                 item,
-                "`#[boyia_class]` module may only contain builtin functions",
+                "`#[boyia_class]` impl may only contain builtin functions",
             ));
         };
-        let mut func = func.clone();
+        let mut func = impl_fn_to_item_fn(method)?;
         let Some(kind) = take_attr_config(&mut func.attrs)? else {
             return Err(syn::Error::new_spanned(
-                func,
+                method,
                 "functions inside `#[boyia_class]` must have `#[boyia_async_builtin(...)]` or `#[boyia_sync_builtin(...)]`",
             ));
         };
@@ -550,8 +564,8 @@ fn expand_class(class_config: &ClassConfig, module: &ItemMod) -> syn::Result<pro
 
     if method_expansions.is_empty() {
         return Err(syn::Error::new_spanned(
-            module,
-            "`#[boyia_class]` module must contain at least one builtin function",
+            imp,
+            "`#[boyia_class]` impl must contain at least one builtin function",
         ));
     }
 
@@ -573,8 +587,10 @@ fn expand_class(class_config: &ClassConfig, module: &ItemMod) -> syn::Result<pro
 }
 
 /// ```ignore
+/// struct FileBuiltins;
+///
 /// #[boyia_class(name = "File", registrar = builtin_file_class)]
-/// mod file_builtins {
+/// impl FileBuiltins {
 ///     #[boyia_async_builtin(native = file_read_native, method = "read")]
 ///     fn file_read(path: String) -> AsyncBuiltinResult { ... }
 ///
@@ -585,9 +601,9 @@ fn expand_class(class_config: &ClassConfig, module: &ItemMod) -> syn::Result<pro
 #[proc_macro_attribute]
 pub fn boyia_class(attr: TokenStream, item: TokenStream) -> TokenStream {
     let class_config = parse_macro_input!(attr as ClassConfig);
-    let module = parse_macro_input!(item as ItemMod);
+    let imp = parse_macro_input!(item as ItemImpl);
 
-    match expand_class(&class_config, &module) {
+    match expand_class(&class_config, &imp) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }

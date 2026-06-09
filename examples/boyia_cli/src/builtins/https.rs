@@ -87,8 +87,10 @@ fn https_result(url: &str, params: Option<&str>) -> AsyncBuiltinResult {
     }
 }
 
+struct HttpsBuiltins;
+
 #[boyia_class(name = "Https", registrar = builtin_https_class)]
-mod https_builtins {
+impl HttpsBuiltins {
     #[boyia_async_builtin(native = https_load_native, method = "load")]
     fn https_load(url: String) -> AsyncBuiltinResult {
         https_result(&url, None)
