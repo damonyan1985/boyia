@@ -167,6 +167,20 @@ class PrinterExt extends Printer {
         Util.log("testLocal result: " + test);
     }
 
+    prop fun testIsAbsolute() {
+        var absPath = "C:/work/demo.txt";
+        var relPath = "script/main.boyia";
+        var abs = File.isAbsolute(absPath);
+        var rel = File.isAbsolute(relPath);
+        Util.log("isAbsolute " + absPath + " -> " + abs);
+        Util.log("isAbsolute " + relPath + " -> " + rel);
+        if (abs == 1 && rel == 0) {
+            Util.log("testIsAbsolute ok");
+        } else {
+            Util.log("testIsAbsolute fail: abs=" + abs + " rel=" + rel);
+        }
+    }
+
     prop async zipFile() {
         var result = (await this.zipAsync("E:\work\project\BoyiaEngine\BoyiaTools\boyia-ide\boyia\script\test", "E:\work\project\BoyiaEngine\BoyiaTools\boyia-ide\boyia\script\test.zip", "123456"));
         if (result.get("status") == "ok") {
@@ -308,6 +322,8 @@ class PrinterExt extends Printer {
 
         var str = Json.toString(body);
         Util.log("Json String is " + str);
+
+        this.testIsAbsolute();
     }
 }
 

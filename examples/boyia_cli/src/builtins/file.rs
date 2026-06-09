@@ -88,4 +88,9 @@ mod file_builtins {
     fn file_exists(path: String) -> AsyncBuiltinResult {
         path_exists_result(&path)
     }
+
+    #[boyia_sync_builtin(native = file_is_absolute_native, method = "isAbsolute")]
+    fn file_is_absolute(path: String) -> bool {
+        std::path::Path::new(&path).is_absolute()
+    }
 }

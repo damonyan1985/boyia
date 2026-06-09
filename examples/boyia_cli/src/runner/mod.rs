@@ -6,6 +6,7 @@ use boyia_vm::{BoyiaVM, LUintPtr};
 pub type BuiltinRegistrar = fn(&mut BoyiaVM, &mut dyn FnMut(&str) -> LUintPtr);
 
 pub(crate) mod r#async;
+pub(crate) mod sync;
 mod run_loop;
 mod runner;
 mod task_thread;
