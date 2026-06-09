@@ -2,12 +2,9 @@
 
 #![allow(dead_code)]
 
-use crate::runner::r#async::{
-    attach_method, register_async_builtin_class, AsyncBuiltinResult, AsyncCtx, CallSite, ScriptCallback,
-};
-use crate::define_async_native;
-use crate::some_or_end;
-use boyia_vm::{LUintPtr, OpHandleResult, BoyiaVM};
+use crate::runner::r#async::{attach_method, register_async_builtin_class, AsyncBuiltinResult};
+use builtin_macro::boyia_async_builtin;
+use boyia_vm::{LUintPtr, BoyiaVM};
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
@@ -22,30 +19,8 @@ pub fn builtin_https_class(vm: &mut BoyiaVM, gen_id: &mut dyn FnMut(&str) -> LUi
     });
 }
 
-fn schedule_request(
-    ctx: &AsyncCtx,
-    url: String,
-    params: Option<String>,
-    callback: ScriptCallback,
-) -> bool {
-    ctx.spawn(
-        move || match execute_https_request(&url, params.as_deref()) {
-            Ok(text) => {
-                if text.is_empty() {
-                    AsyncBuiltinResult::Ok { data: None }
-                } else {
-                    AsyncBuiltinResult::Ok {
-                        data: Some(text),
-                    }
-                }
-            }
-            Err(err) => AsyncBuiltinResult::Fail {
-                message: format!("Https error: {err}"),
-            },
-        },
-        callback,
-        |r| println!("https result: {}", r.log_preview()),
-    )
+fn log_https_result(r: &AsyncBuiltinResult) {
+    println!("https result: {}", r.log_preview());
 }
 
 fn execute_https_request(url: &str, params: Option<&str>) -> Result<String, String> {
@@ -103,18 +78,29 @@ fn execute_https_request(url: &str, params: Option<&str>) -> Result<String, Stri
         .map_err(|err| err.to_string())
 }
 
-fn https_load_handler(site: &mut CallSite<'_>) -> OpHandleResult {
-    let url = some_or_end!(site.arg_string(1));
-    let callback = some_or_end!(site.callback());
-    site.finish(schedule_request(site.ctx(), url, None, callback))
+fn https_result(url: &str, params: Option<&str>) -> AsyncBuiltinResult {
+    match execute_https_request(url, params) {
+        Ok(text) => {
+            if text.is_empty() {
+                AsyncBuiltinResult::Ok { data: None }
+            } else {
+                AsyncBuiltinResult::Ok {
+                    data: Some(text),
+                }
+            }
+        }
+        Err(err) => AsyncBuiltinResult::Fail {
+            message: format!("Https error: {err}"),
+        },
+    }
 }
 
-fn https_request_handler(site: &mut CallSite<'_>) -> OpHandleResult {
-    let url = some_or_end!(site.arg_string(1));
-    let params = some_or_end!(site.arg_string(2));
-    let callback = some_or_end!(site.callback());
-    site.finish(schedule_request(site.ctx(), url, Some(params), callback))
+#[boyia_async_builtin(native = https_load_native)]
+fn https_load(url: String) -> AsyncBuiltinResult {
+    https_result(&url, None)
 }
 
-define_async_native!(https_load_native, 3, https_load_handler);
-define_async_native!(https_request_native, 4, https_request_handler);
+#[boyia_async_builtin(native = https_request_native, before = log_https_result)]
+fn https_request(url: String, params: String) -> AsyncBuiltinResult {
+    https_result(&url, Some(params.as_str()))
+}

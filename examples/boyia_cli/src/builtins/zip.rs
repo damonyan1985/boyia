@@ -2,12 +2,9 @@
 
 #![allow(dead_code)]
 
-use crate::runner::r#async::{
-    attach_method, register_async_builtin_class, AsyncBuiltinResult, AsyncCtx, CallSite, ScriptCallback,
-};
-use crate::define_async_native;
-use crate::some_or_end;
-use boyia_vm::{LUintPtr, OpHandleResult, BoyiaVM};
+use crate::runner::r#async::{attach_method, register_async_builtin_class, AsyncBuiltinResult};
+use builtin_macro::boyia_async_builtin;
+use boyia_vm::{LUintPtr, BoyiaVM};
 use std::fs::{self, File};
 use std::io::copy;
 use std::path::{Path, PathBuf};
@@ -206,61 +203,22 @@ fn run_extract(src_zip: PathBuf, dest_dir: PathBuf, password: String) -> AsyncBu
     AsyncBuiltinResult::Ok { data: None }
 }
 
-fn schedule_compress(
-    ctx: &AsyncCtx,
+#[boyia_async_builtin(native = zip_compress_native)]
+fn zip_compress(
     src: String,
     dest: String,
+    #[optional(default = "")]
     password: String,
-    callback: ScriptCallback,
-) -> bool {
-    ctx.spawn(
-        move || run_compress(PathBuf::from(src), PathBuf::from(dest), password),
-        callback,
-        |_| (),
-    )
+) -> AsyncBuiltinResult {
+    run_compress(PathBuf::from(src), PathBuf::from(dest), password)
 }
 
-fn schedule_extract(
-    ctx: &AsyncCtx,
+#[boyia_async_builtin(native = zip_extract_native)]
+fn zip_extract(
     src: String,
     dest: String,
+    #[optional(default = "")]
     password: String,
-    callback: ScriptCallback,
-) -> bool {
-    ctx.spawn(
-        move || run_extract(PathBuf::from(src), PathBuf::from(dest), password),
-        callback,
-        |_| (),
-    )
+) -> AsyncBuiltinResult {
+    run_extract(PathBuf::from(src), PathBuf::from(dest), password)
 }
-
-fn zip_compress_handler(site: &mut CallSite<'_>) -> OpHandleResult {
-    let src = some_or_end!(site.arg_string(1));
-    let dest = some_or_end!(site.arg_string(2));
-    let password = site.arg_string_or(3, "");
-    let callback = some_or_end!(site.callback());
-    site.finish(schedule_compress(
-        site.ctx(),
-        src,
-        dest,
-        password,
-        callback,
-    ))
-}
-
-fn zip_extract_handler(site: &mut CallSite<'_>) -> OpHandleResult {
-    let src = some_or_end!(site.arg_string(1));
-    let dest = some_or_end!(site.arg_string(2));
-    let password = site.arg_string_or(3, "");
-    let callback = some_or_end!(site.callback());
-    site.finish(schedule_extract(
-        site.ctx(),
-        src,
-        dest,
-        password,
-        callback,
-    ))
-}
-
-define_async_native!(zip_compress_native, 5, zip_compress_handler);
-define_async_native!(zip_extract_native, 5, zip_extract_handler);
