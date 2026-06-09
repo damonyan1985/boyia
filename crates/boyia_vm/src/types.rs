@@ -24,6 +24,7 @@ pub const NUM_LOCAL_VARS: usize = 512;
 pub const NUM_RESULT: usize = 128;
 pub const FUNC_CALLS: usize = 32;
 pub const LOOP_NEST: usize = 32;
+/// Default initial capacity for [VMCode] (not a hard limit; the vector grows as needed).
 pub const CODE_CAPACITY: usize = 1024 * 32;
 pub const CONST_CAPACITY: usize = 1024;
 pub const ENTRY_CAPACITY: usize = 1024;
@@ -750,11 +751,8 @@ impl VMCode {
         }
     }
 
-    /// Append one placeholder instruction; returns its index or None when full.
+    /// Append one placeholder instruction; returns its index.
     pub fn push_instruction(&mut self) -> Option<usize> {
-        if self.mCode.len() >= CODE_CAPACITY {
-            return None;
-        }
         let index = self.mCode.len();
         self.mCode.push(Self::placeholder_instruction());
         Some(index)
@@ -762,7 +760,7 @@ impl VMCode {
 
     /// Replace all instructions from a raw buffer (used by `load_instructions`).
     pub unsafe fn load_from_buffer(&mut self, buffer: *const Instruction, count: usize) -> bool {
-        if buffer.is_null() || count > CODE_CAPACITY {
+        if buffer.is_null() {
             return false;
         }
         self.mCode.clear();

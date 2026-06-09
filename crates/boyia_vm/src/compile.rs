@@ -119,7 +119,7 @@ unsafe fn skip_comment(cs: &mut CompileState) {
     }
 }
 
-/// Allocate one instruction in vm->mVMCode; returns index or None if full.
+/// Allocate one instruction in vm->mVMCode; returns index or None on failure.
 fn allocate_instruction(vm: &mut BoyiaVM) -> Option<usize> {
     let index = vm.mVMCode.push_instruction()?;
     let inst = vm.mVMCode.instruction_mut(index)?;
