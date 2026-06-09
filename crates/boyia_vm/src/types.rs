@@ -62,10 +62,10 @@ pub trait Runtime {
     fn memory_pool(&self) -> *mut LVoid;
 
     /// Create a new pool for compaction (CreateRuntimeToMemory). Returns to_pool.
-    fn create_runtime_to_memory(&self, _vm: *mut LVoid) -> *mut LVoid;
+    fn create_runtime_to_memory(&self, vm: &mut BoyiaVM) -> *mut LVoid;
 
     /// Switch runtime to use to_pool after compaction (UpdateRuntimeMemory / changeMemoryPool).
-    fn update_runtime_memory(&mut self, _to_pool: *mut LVoid, _vm: *mut LVoid);
+    fn update_runtime_memory(&mut self, to_pool: *mut LVoid, vm: &mut BoyiaVM);
 
     /// Register a heap object with the GC (GCAppendRef). GC and VM are obtained from [Runtime::gc_ptr] / [Runtime::vm_ptr]. Implemented by [BoyiaRuntime]; no-op for other runtimes.
     fn gc_append_ref(&self, _address: *mut LVoid, _type_: ValueType);

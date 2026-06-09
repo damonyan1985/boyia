@@ -11,7 +11,7 @@ use boyia_builtins::{
 };
 use boyia_vm::{
     cache_vm_code, consume_micro_task, delete_data, execute_global_code,
-    free_memory_pool, init_memory_pool, init_vm_boxed, new_data,
+    free_memory_pool, init_memory_pool, init_vm_boxed, new_data, vm_from_void,
     BoyiaFunction, BoyiaStr, BoyiaVM, BoyiaValue, Global, GlobalList, K_BOYIA_NULL, LInt, LUintPtr, LVoid,
     NativeFunction, NativePtr, OpHandleResult, Runtime, ValueType,
 };
@@ -71,7 +71,7 @@ impl BoyiaRuntime {
             return;
         }
         eprintln!("[init] 2a create_gc");
-        self.gc = unsafe { boyia_gc::create_gc(self.vm_ptr()) };
+        self.gc = unsafe { boyia_gc::create_gc() };
         if self.gc.is_null() {
             eprintln!("[init] WARN create_gc returned null");
         }
@@ -136,7 +136,7 @@ impl BoyiaRuntime {
         if self.vm.is_none() {
             return;
         }
-        self.gc = unsafe { boyia_gc::create_gc(self.vm_ptr()) };
+        self.gc = unsafe { boyia_gc::create_gc() };
         self.id_creator.gen_ident_by_str("this");
         self.id_creator.gen_ident_by_str("String");
         self.init_native_function();
@@ -274,11 +274,11 @@ impl Runtime for BoyiaRuntime {
         boyia_gc::gc_append_ref(address, type_, self);
     }
 
-    fn create_runtime_to_memory(&self, _vm: *mut LVoid) -> *mut LVoid {
+    fn create_runtime_to_memory(&self, _vm: &mut BoyiaVM) -> *mut LVoid {
         unsafe { boyia_vm::init_memory_pool(K_MEMORY_POOL_SIZE) }
     }
 
-    fn update_runtime_memory(&mut self, to_pool: *mut LVoid, _vm: *mut LVoid) {
+    fn update_runtime_memory(&mut self, to_pool: *mut LVoid, _vm: &mut BoyiaVM) {
         if to_pool.is_null() {
             return;
         }
@@ -328,7 +328,9 @@ impl Runtime for BoyiaRuntime {
     fn new_data(&self, size: LInt) -> *mut LVoid {
         unsafe {
             if !self.gc.is_null() {
-                boyia_gc::gc_collect_garbage(self.gc, self.vm_ptr());
+                if let Some(vm) = vm_from_void(self.vm_ptr()) {
+                    boyia_gc::gc_collect_garbage(self.gc, vm);
+                }
             }
             new_data(size, self.memory_pool)
         }

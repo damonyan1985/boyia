@@ -10,18 +10,13 @@ use boyia_memory::{
 };
 use boyia_vm::{
     get_function_count, get_global_table, get_local_stack, get_native_helper_result, get_native_result,
-    get_runtime_from_vm, get_string_buffer_from_body, iterate_micro_task, vm_from_void, BoyiaFunction,
+    get_runtime_from_vm, get_string_buffer_from_body, iterate_micro_task, BoyiaFunction, BoyiaVM,
     BoyiaValue, BuiltinId, LInt, LIntPtr, LVoid, Runtime, ValueType, LUint8,
 };
 use std::ptr;
 
 const MIGRATE_SIZE: usize = 6 * 1024;
 const K_BOYIA_REF_PAGE_SIZE: LInt = 64 * 1024;
-
-#[inline]
-unsafe fn vm_mut(vm: *mut LVoid) -> &'static mut boyia_vm::BoyiaVM {
-    vm_from_void(vm).expect("GC: VM pointer is null")
-}
 
 /// GC color bits in object header (bits 16..18 of mParamCount for Boyia objects).
 const K_BOYIA_GC_MASK: LInt = 0x0003;
@@ -48,12 +43,11 @@ pub(crate) struct UsedRefs {
     pub mEnd: *mut BoyiaRef,
 }
 
-/// GC state (BoyiaGc in C++).
+/// GC state (BoyiaGc in C++). VM is passed per operation by the runtime owner, not stored here.
 #[repr(C)]
 pub struct BoyiaGc {
     pub(crate) mUsedRefs: UsedRefs,
     pub mRefCache: *mut LVoid,
-    pub mBoyiaVM: *mut LVoid,
     pub mMigrates: [*mut LVoid; MIGRATE_SIZE],
 }
 
@@ -135,7 +129,7 @@ unsafe fn free_ref(ref_ptr: *mut BoyiaRef, gc: *mut BoyiaGc) {
 }
 
 /// CreateGC: allocate GC state and ref cache. Returns gc pointer; store in runtime.
-pub unsafe fn create_gc(vm: *mut LVoid) -> *mut BoyiaGc {
+pub unsafe fn create_gc() -> *mut BoyiaGc {
     let gc = fast_malloc(std::mem::size_of::<BoyiaGc>() as LInt) as *mut BoyiaGc;
     if gc.is_null() {
         return ptr::null_mut();
@@ -148,7 +142,6 @@ pub unsafe fn create_gc(vm: *mut LVoid) -> *mut BoyiaGc {
                 mEnd: ptr::null_mut(),
             },
             mRefCache: ptr::null_mut(),
-            mBoyiaVM: vm,
             mMigrates: [ptr::null_mut(); MIGRATE_SIZE],
         },
     );
@@ -176,7 +169,6 @@ pub unsafe fn destroy_gc(gc: *mut BoyiaGc) {
 /// GC and VM are obtained from the given [Runtime].
 pub fn gc_append_ref(address: *mut LVoid, type_: ValueType, runtime: &dyn Runtime) {
     let gc = runtime.gc_ptr() as *mut BoyiaGc;
-    let _vm = runtime.vm_ptr();
     if gc.is_null() {
         return;
     }
@@ -263,7 +255,7 @@ fn is_invalid_object(ref_ptr: *const BoyiaRef) -> bool {
     true
 }
 
-unsafe fn delete_object(ref_ptr: *const BoyiaRef, vm: *mut LVoid) {
+unsafe fn delete_object(ref_ptr: *const BoyiaRef, vm: &mut BoyiaVM) {
     let ty = (*ref_ptr).mType;
     if ty == ValueType::BY_NAVCLASS {
         native_delete((*ref_ptr).mAddress);
@@ -286,14 +278,14 @@ unsafe fn delete_object(ref_ptr: *const BoyiaRef, vm: *mut LVoid) {
             if is_native_string(obj_body) {
                 free_buffer(buf.mPtr as *mut LUint8, buf.mLen);
             } else if is_boyia_string(obj_body) {
-                let rt = get_runtime_from_vm(vm_mut(vm));
+                let rt = get_runtime_from_vm(vm);
                 if !rt.is_null() {
                     (*rt).delete_data(buf.mPtr as *mut LVoid);
                 }
             }
         }
     }
-    let rt = get_runtime_from_vm(vm_mut(vm));
+    let rt = get_runtime_from_vm(vm);
     if !rt.is_null() {
         (*rt).delete_data((*ref_ptr).mAddress);
     }
@@ -310,11 +302,10 @@ fn reset_boyia_object(fun: *mut BoyiaFunction) {
     }
 }
 
-unsafe fn reset_memory_color(gc: *mut BoyiaGc) {
+unsafe fn reset_memory_color(gc: *mut BoyiaGc, vm: &mut BoyiaVM) {
     if gc.is_null() {
         return;
     }
-    let vm = (*gc).mBoyiaVM;
     let mut ref_ptr = (*gc).mUsedRefs.mBegin;
     while !ref_ptr.is_null() {
         let ty = (*ref_ptr).mType;
@@ -327,7 +318,7 @@ unsafe fn reset_memory_color(gc: *mut BoyiaGc) {
     }
     let mut table_addr: LIntPtr = 0;
     let mut size: LInt = 0;
-    get_global_table(&mut table_addr, &mut size, vm_mut(vm));
+    get_global_table(&mut table_addr, &mut size, vm);
     if table_addr == 0 || size <= 0 {
         return;
     }
@@ -341,7 +332,7 @@ unsafe fn reset_memory_color(gc: *mut BoyiaGc) {
     }
 }
 
-unsafe fn clear_all_garbage(gc: *mut BoyiaGc, vm: *mut LVoid) {
+unsafe fn clear_all_garbage(gc: *mut BoyiaGc, vm: &mut BoyiaVM) {
     if gc.is_null() {
         return;
     }
@@ -377,8 +368,8 @@ unsafe fn clear_all_garbage(gc: *mut BoyiaGc, vm: *mut LVoid) {
 }
 
 /// Mark persistent roots from the runtime [boyia_vm::GlobalList] via [mark_value]. Anonymous entries only mark capture cells, not the wrapper value. Called from [gc_collect_garbage].
-unsafe fn mark_persistent(vm: *mut LVoid) {
-    let rt = get_runtime_from_vm(vm_mut(vm));
+unsafe fn mark_persistent(vm: &mut BoyiaVM) {
+    let rt = get_runtime_from_vm(vm);
     if rt.is_null() {
         return;
     }
@@ -390,14 +381,14 @@ unsafe fn mark_persistent(vm: *mut LVoid) {
 }
 
 /// GCollectGarbage: reset color, mark from roots (global, local stack, micro task, native result, persistent), then sweep. Match GCollectGarbage in BoyiaGC.cpp.
-pub unsafe fn gc_collect_garbage(gc: *mut BoyiaGc, vm: *mut LVoid) {
+pub unsafe fn gc_collect_garbage(gc: *mut BoyiaGc, vm: &mut BoyiaVM) {
     if gc.is_null() {
         return;
     }
-    reset_memory_color(gc);
+    reset_memory_color(gc, vm);
     let mut table_addr: LIntPtr = 0;
     let mut size: LInt = 0;
-    get_global_table(&mut table_addr, &mut size, vm_mut(vm));
+    get_global_table(&mut table_addr, &mut size, vm);
     mark_value_table(table_addr as *mut BoyiaValue, size);
 
     let mut stack_addr: LIntPtr = 0;
@@ -410,7 +401,7 @@ pub unsafe fn gc_collect_garbage(gc: *mut BoyiaGc, vm: *mut LVoid) {
             &mut size,
             &mut op_stack_addr,
             &mut op_size,
-            vm_mut(vm),
+            vm,
             state,
         );
         mark_value_table(stack_addr as *mut BoyiaValue, size);
@@ -425,7 +416,7 @@ pub unsafe fn gc_collect_garbage(gc: *mut BoyiaGc, vm: *mut LVoid) {
     let mut obj = ptr::null_mut::<BoyiaValue>();
     let mut task = ptr::null_mut();
     loop {
-        task = iterate_micro_task(&mut obj, &mut result, vm_mut(vm), task);
+        task = iterate_micro_task(&mut obj, &mut result, vm, task);
         if !result.is_null() {
             mark_value(result);
         }
@@ -437,11 +428,11 @@ pub unsafe fn gc_collect_garbage(gc: *mut BoyiaGc, vm: *mut LVoid) {
         }
     }
 
-    let result_val = get_native_result(vm_mut(vm));
+    let result_val = get_native_result(vm);
     if !result_val.is_null() {
         mark_value(result_val);
     }
-    let helper_val = get_native_helper_result(vm_mut(vm));
+    let helper_val = get_native_helper_result(vm);
     if !helper_val.is_null() {
         mark_value(helper_val);
     }
@@ -460,7 +451,7 @@ unsafe fn reset_migrate_address(
     to_pool: *mut LVoid,
     fun: *const BoyiaFunction,
     gc: *mut BoyiaGc,
-    vm: *mut LVoid,
+    vm: &mut BoyiaVM,
 ) {
     if value.is_null() || fun.is_null() || gc.is_null() {
         return;
@@ -480,7 +471,7 @@ unsafe fn reset_migrate_address(
             if !buffer.is_null() {
                 let buf = &mut *buffer;
                 let from_pool = {
-                    let rt = get_runtime_from_vm(vm_mut(vm));
+                    let rt = get_runtime_from_vm(vm);
                     if rt.is_null() {
                         return;
                     }
@@ -501,7 +492,7 @@ unsafe fn migrate_object(
     migrate_index: &mut LInt,
     to_pool: *mut LVoid,
     gc: *mut BoyiaGc,
-    vm: *mut LVoid,
+    vm: &mut BoyiaVM,
 ) {
     let vt = (*value).mValueType;
     let fun_ptr = if vt == ValueType::BY_CLASS {
@@ -513,7 +504,7 @@ unsafe fn migrate_object(
         return;
     }
     if migrate_flag(fun_ptr) == 0 {
-        let rt = get_runtime_from_vm(vm_mut(vm));
+        let rt = get_runtime_from_vm(vm);
         let from_pool = if rt.is_null() {
             ptr::null_mut()
         } else {
@@ -533,7 +524,7 @@ unsafe fn migrate_value(
     migrate_index: &mut LInt,
     to_pool: *mut LVoid,
     gc: *mut BoyiaGc,
-    vm: *mut LVoid,
+    vm: &mut BoyiaVM,
 ) {
     if value.is_null() {
         return;
@@ -566,7 +557,7 @@ unsafe fn migrate_value_table(
     migrate_index: &mut LInt,
     to_pool: *mut LVoid,
     gc: *mut BoyiaGc,
-    vm: *mut LVoid,
+    vm: &mut BoyiaVM,
 ) {
     if table.is_null() || size <= 0 {
         return;
@@ -597,12 +588,11 @@ fn reset_gc_ref(gc: *mut BoyiaGc) {
 
 /// CompactMemory: migrate live objects to a new pool and switch. Match CompactMemory in BoyiaGC.cpp.
 #[allow(dead_code)]
-pub(crate) unsafe fn compact_memory(gc: *mut BoyiaGc) {
+pub(crate) unsafe fn compact_memory(gc: *mut BoyiaGc, vm: &mut BoyiaVM) {
     if gc.is_null() {
         return;
     }
-    let vm = (*gc).mBoyiaVM;
-    let rt = get_runtime_from_vm(vm_mut(vm));
+    let rt = get_runtime_from_vm(vm);
     if rt.is_null() {
         return;
     }
@@ -614,7 +604,7 @@ pub(crate) unsafe fn compact_memory(gc: *mut BoyiaGc) {
     }
     let mut table_addr: LIntPtr = 0;
     let mut size: LInt = 0;
-    get_global_table(&mut table_addr, &mut size, vm_mut(vm));
+    get_global_table(&mut table_addr, &mut size, vm);
     migrate_value_table(
         table_addr as *mut BoyiaValue,
         size,
@@ -633,7 +623,7 @@ pub(crate) unsafe fn compact_memory(gc: *mut BoyiaGc) {
             &mut size,
             &mut op_stack_addr,
             &mut op_size,
-            vm_mut(vm),
+            vm,
             state,
         );
         migrate_value_table(

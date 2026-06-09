@@ -25,10 +25,10 @@ impl Runtime for TestRuntime {
     fn memory_pool(&self) -> *mut std::ffi::c_void {
         ptr::null_mut()
     }
-    fn create_runtime_to_memory(&self, _vm: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
+    fn create_runtime_to_memory(&self, _vm: &mut boyia_vm::BoyiaVM) -> *mut std::ffi::c_void {
         ptr::null_mut()
     }
-    fn update_runtime_memory(&mut self, _to_pool: *mut std::ffi::c_void, _vm: *mut std::ffi::c_void) {}
+    fn update_runtime_memory(&mut self, _to_pool: *mut std::ffi::c_void, _vm: &mut boyia_vm::BoyiaVM) {}
     fn gc_append_ref(&self, _address: *mut std::ffi::c_void, _type: ValueType) {}
     fn gc_ptr(&self) -> *mut std::ffi::c_void {
         ptr::null_mut()
