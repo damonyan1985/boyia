@@ -651,7 +651,7 @@ pub(crate) struct Instruction {
     pub mOPLeft: OpCommand,
     pub mOPRight: OpCommand,
     pub mCache: *mut InlineCache,
-    pub mNext: LIntPtr,
+    pub mNext: OpOffset,
 }
 
 pub(crate) struct CommandTable {

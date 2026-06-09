@@ -173,7 +173,7 @@ unsafe fn put_instruction(
     if end_idx < 0 {
         cmds.mBegin = idx as LIntPtr;
     } else if let Some(prev) = cs.mVm.mVMCode.instruction_mut(end_idx as usize) {
-        prev.mNext = idx as LIntPtr;
+        prev.mNext = idx as OpOffset;
     }
     cmds.mEnd = idx as LIntPtr;
 
