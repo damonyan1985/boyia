@@ -10,8 +10,8 @@ use boyia_vm::{
     BoyiaValue, BuiltinId, Global, K_BOYIA_NULL, NativePtr, OpHandleResult, RealValue, Runtime, ValueType,
     LInt, LInt8, LIntPtr, LUintPtr, BoyiaVM,
 };
-use crate::run_loop::RunLoopHandle;
-use crate::thread_pool::ThreadPool;
+use super::run_loop::RunLoopHandle;
+use super::thread_pool::ThreadPool;
 use std::str;
 use std::sync::Weak;
 
@@ -158,7 +158,7 @@ pub fn attach_method<F>(
     class_body: *mut BoyiaFunction,
     vm: &mut BoyiaVM,
 ) where
-    F: FnMut(&str) -> LUintPtr,
+    F: FnMut(&str) -> LUintPtr + ?Sized,
 {
     unsafe {
         gen_builtin_class_function(gen_id(name), native, class_body, vm);
@@ -172,7 +172,7 @@ pub fn register_async_builtin_class<F, R>(
     class_name: &str,
     mut register: R,
 ) where
-    F: FnMut(&str) -> LUintPtr,
+    F: FnMut(&str) -> LUintPtr + ?Sized,
     R: FnMut(*mut BoyiaFunction, &mut BoyiaVM, &mut F),
 {
     let class_key = gen_id(class_name);
@@ -191,7 +191,7 @@ pub fn register_async_builtin_class<F, R>(
 macro_rules! define_async_native {
     ($native:ident, $min:expr, $handler:ident) => {
         unsafe fn $native(vm: &mut boyia_vm::BoyiaVM) -> boyia_vm::OpHandleResult {
-            $crate::builtins::r#async::async_dispatch(vm, $min, $handler)
+            $crate::runner::r#async::async_dispatch(vm, $min, $handler)
         }
     };
 }

@@ -2,13 +2,11 @@
 
 #![allow(dead_code)]
 
-use crate::builtins::r#async::{AsyncCtx, CliEmbedder};
-use crate::builtins::file::builtin_file_class;
-use crate::builtins::https::builtin_https_class;
-use crate::builtins::zip::builtin_zip_class;
-use crate::run_loop::RunLoopError;
-use crate::task_thread::TaskThread;
-use crate::thread_pool::ThreadPool;
+use super::r#async::{AsyncCtx, CliEmbedder};
+use super::run_loop::RunLoopError;
+use super::task_thread::TaskThread;
+use super::thread_pool::ThreadPool;
+use super::BuiltinRegistrar;
 use boyia_runtime::BoyiaRuntime;
 use std::sync::{mpsc, Arc};
 
@@ -21,7 +19,16 @@ pub struct BoyiaRunner {
 }
 
 impl BoyiaRunner {
-    pub fn create() -> Box<Self> {
+    /// Create a runner and register `builtins` on the Boyia task thread after VM init.
+    pub fn create(builtins: &[BuiltinRegistrar]) -> Box<Self> {
+        let builtins: Vec<BuiltinRegistrar> = builtins.to_vec();
+        Self::create_with_thread_pool(builtins, DEFAULT_HTTPS_THREAD_COUNT)
+    }
+
+    pub fn create_with_thread_pool(
+        builtins: Vec<BuiltinRegistrar>,
+        https_thread_count: usize,
+    ) -> Box<Self> {
         let (ready_tx, ready_rx) = mpsc::channel();
 
         let task_thread = TaskThread::start_with_init("boyia-runner", move |_| {
@@ -32,7 +39,7 @@ impl BoyiaRunner {
         });
 
         let ready = ready_rx.recv().unwrap_or(false);
-        let thread_pool = Arc::new(ThreadPool::new(DEFAULT_HTTPS_THREAD_COUNT));
+        let thread_pool = Arc::new(ThreadPool::new(https_thread_count));
 
         let runner = Self {
             boyia_thread: Some(task_thread),
@@ -55,9 +62,9 @@ impl BoyiaRunner {
             runtime.set_embedder(embedder);
             let _ = runtime.with_vm_and_id_creator(|vm, id_creator| {
                 let mut gen_id = |s: &str| id_creator.gen_ident_by_str(s);
-                builtin_https_class(vm, &mut gen_id);
-                builtin_file_class(vm, &mut gen_id);
-                builtin_zip_class(vm, &mut gen_id);
+                for register in &builtins {
+                    register(vm, &mut gen_id);
+                }
             });
             let _ = init_tx.send(());
         });

@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use super::r#async::{
+use crate::runner::r#async::{
     attach_method, register_async_builtin_class, AsyncBuiltinResult, AsyncCtx, CallSite, ScriptCallback,
 };
 use crate::define_async_native;
@@ -15,10 +15,7 @@ use std::time::Duration;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
-pub fn builtin_https_class<F>(vm: &mut BoyiaVM, gen_id: &mut F)
-where
-    F: FnMut(&str) -> LUintPtr,
-{
+pub fn builtin_https_class(vm: &mut BoyiaVM, gen_id: &mut dyn FnMut(&str) -> LUintPtr) {
     register_async_builtin_class(vm, gen_id, "Https", |class_body, vm, gen_id| {
         attach_method(gen_id, "load", https_load_native, class_body, vm);
         attach_method(gen_id, "request", https_request_native, class_body, vm);

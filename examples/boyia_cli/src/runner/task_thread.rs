@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use crate::run_loop::{RunLoop, RunLoopError, RunLoopHandle};
+use super::run_loop::{RunLoop, RunLoopError, RunLoopHandle};
 use std::thread::{self, JoinHandle};
 
 /// Background task thread with an internal run loop.

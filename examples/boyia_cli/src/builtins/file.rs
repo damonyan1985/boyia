@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use super::r#async::{
+use crate::runner::r#async::{
     attach_method, register_async_builtin_class, AsyncBuiltinResult, AsyncCtx, CallSite, ScriptCallback,
 };
 use crate::define_async_native;
@@ -11,10 +11,7 @@ use boyia_vm::{LUintPtr, OpHandleResult, BoyiaVM};
 use std::fs::{self, File};
 use std::io::ErrorKind;
 
-pub fn builtin_file_class<F>(vm: &mut BoyiaVM, gen_id: &mut F)
-where
-    F: FnMut(&str) -> LUintPtr,
-{
+pub fn builtin_file_class(vm: &mut BoyiaVM, gen_id: &mut dyn FnMut(&str) -> LUintPtr) {
     register_async_builtin_class(vm, gen_id, "File", |class_body, vm, gen_id| {
         attach_method(gen_id, "read", file_read_native, class_body, vm);
         attach_method(gen_id, "write", file_write_native, class_body, vm);

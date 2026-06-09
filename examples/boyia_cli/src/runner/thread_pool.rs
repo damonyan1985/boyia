@@ -2,8 +2,8 @@
 
 #![allow(dead_code)]
 
-use crate::run_loop::RunLoopError;
-use crate::task_thread::TaskThread;
+use super::run_loop::RunLoopError;
+use super::task_thread::TaskThread;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
