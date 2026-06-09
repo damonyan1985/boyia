@@ -165,7 +165,7 @@ unsafe fn get_op_value(inst: &Instruction, side: OpSide, vm: &mut BoyiaVM) -> *m
 
 /// Next instruction index via `mNext`; [kInvalidInstruction] at chain end.
 #[inline]
-pub(crate) fn next_pc(pc: LIntPtr, vm: &BoyiaVM) -> LIntPtr {
+pub(crate) fn next_pc(pc: OpOffset, vm: &BoyiaVM) -> OpOffset {
     if pc < 0 {
         return kInvalidInstruction;
     }
@@ -175,18 +175,22 @@ pub(crate) fn next_pc(pc: LIntPtr, vm: &BoyiaVM) -> LIntPtr {
     }
 }
 
-/// Dispatch the instruction at `pc`. Uses a raw reborrow so handlers can take `&mut Instruction` and `&mut BoyiaVM` together.
+/// Dispatch the instruction at `pc`.
+///
+/// `inst` and `vm` must be passed together to handlers; reborrowing `vm.mVMCode` and `vm`
+/// as two mutable references is rejected by the borrow checker, so we use a raw reborrow here.
 #[inline]
-unsafe fn dispatch_instruction_at(pc: LIntPtr, vm: &mut BoyiaVM) -> OpHandleResult {
-    let inst = match vm.mVMCode.instruction_at_offset_mut(pc) {
-        Some(inst) => inst as *mut Instruction,
-        None => return OpHandleResult::kOpResultEnd,
+unsafe fn dispatch_instruction_at(pc: OpOffset, vm: &mut BoyiaVM) -> OpHandleResult {
+    let Some(inst) = vm.mVMCode.instruction_at_offset_mut(pc) else {
+        return OpHandleResult::kOpResultEnd;
     };
-    dispatch_instruction(&mut *inst, vm)
+    // SAFETY: `inst` points at `vm.mVMCode[pc]`; handlers read/mutate that slot and use other
+    // `vm` fields without reallocating `mVMCode` during dispatch.
+    dispatch_instruction(unsafe { &mut *ptr::from_mut(inst) }, vm)
 }
 
 #[inline]
-pub(crate) fn pc_is_valid(pc: LIntPtr) -> bool {
+pub(crate) fn pc_is_valid(pc: OpOffset) -> bool {
     pc >= 0
 }
 

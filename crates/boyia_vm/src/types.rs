@@ -11,6 +11,9 @@ pub use boyia_types::{
     LVoid,
 };
 
+/// Instruction index / chain offset in [VMCode] (same representation as [LIntPtr]).
+pub type OpOffset = LIntPtr;
+
 // ---------------------------------------------------------------------------
 // Numeric constants (BoyiaCore.cpp #define)
 // ---------------------------------------------------------------------------
@@ -373,7 +376,7 @@ pub enum OpInstType {
 
 // Use enums directly: ValueType::BY_VAR, CmdType::kCmdAdd, etc.
 
-pub const kInvalidInstruction: LIntPtr = -1;
+pub const kInvalidInstruction: OpOffset = -1;
 
 /// Handler return type: use OpHandleResult for dispatch.
 
@@ -654,9 +657,9 @@ pub(crate) struct Instruction {
 
 pub(crate) struct CommandTable {
     /// Index of first instruction in [VMCode]; [kInvalidInstruction] when empty.
-    pub mBegin: LIntPtr,
+    pub mBegin: OpOffset,
     /// Index of last instruction in the chain; [kInvalidInstruction] when empty.
-    pub mEnd: LIntPtr,
+    pub mEnd: OpOffset,
 }
 
 impl CommandTable {
@@ -670,7 +673,7 @@ impl CommandTable {
 
 pub(crate) struct StackFrame {
     /// Index into [VMCode]; [kInvalidInstruction] when idle.
-    pub mPC: LIntPtr,
+    pub mPC: OpOffset,
     pub mLValSize: LInt,
     pub mLoopSize: LInt,
     pub mResultNum: LInt,
@@ -721,18 +724,18 @@ impl VMCode {
         self.mCode.get(index)
     }
 
-    /// Mutable reference by compile/execute index ([LIntPtr] offset into [VMCode]).
+    /// Mutable reference by compile/execute index ([OpOffset] into [VMCode]).
     #[inline]
-    pub fn instruction_at_offset_mut(&mut self, offset: LIntPtr) -> Option<&mut Instruction> {
+    pub fn instruction_at_offset_mut(&mut self, offset: OpOffset) -> Option<&mut Instruction> {
         if offset < 0 {
             return None;
         }
         self.instruction_mut(offset as usize)
     }
 
-    /// Shared reference by compile/execute index.
+    /// Shared reference by compile/execute index ([OpOffset]).
     #[inline]
-    pub fn instruction_at_offset(&self, offset: LIntPtr) -> Option<&Instruction> {
+    pub fn instruction_at_offset(&self, offset: OpOffset) -> Option<&Instruction> {
         if offset < 0 {
             return None;
         }
