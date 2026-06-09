@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use crate::runner::r#async::AsyncBuiltinResult;
-use builtin_macro::boyia_async_class;
+use builtin_macro::boyia_class;
 use std::fs::{self, File};
 use std::io::copy;
 use std::path::{Path, PathBuf};
@@ -195,7 +195,7 @@ fn run_extract(src_zip: PathBuf, dest_dir: PathBuf, password: String) -> AsyncBu
     AsyncBuiltinResult::Ok { data: None }
 }
 
-#[boyia_async_class(name = "Zip", registrar = builtin_zip_class)]
+#[boyia_class(name = "Zip", registrar = builtin_zip_class)]
 mod zip_builtins {
     #[boyia_async_builtin(native = zip_compress_native, method = "compress")]
     fn zip_compress(

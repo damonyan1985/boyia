@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use crate::runner::r#async::AsyncBuiltinResult;
-use builtin_macro::boyia_async_class;
+use builtin_macro::boyia_class;
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
@@ -87,7 +87,7 @@ fn https_result(url: &str, params: Option<&str>) -> AsyncBuiltinResult {
     }
 }
 
-#[boyia_async_class(name = "Https", registrar = builtin_https_class)]
+#[boyia_class(name = "Https", registrar = builtin_https_class)]
 mod https_builtins {
     #[boyia_async_builtin(native = https_load_native, method = "load")]
     fn https_load(url: String) -> AsyncBuiltinResult {

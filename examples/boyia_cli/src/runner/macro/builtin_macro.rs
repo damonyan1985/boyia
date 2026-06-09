@@ -1,4 +1,4 @@
-//! `#[boyia_async_class]` — compile-time class registrar with unrolled `attach_method` calls.
+//! `#[boyia_class]` — compile-time class registrar with unrolled `attach_method` calls.
 //! Child fns use `#[boyia_async_builtin]` or `#[boyia_sync_builtin]` (parsed by this macro).
 
 use proc_macro::TokenStream;
@@ -116,7 +116,7 @@ impl Parse for AsyncMethodConfig {
                 "class" => {
                     return Err(syn::Error::new(
                         key.span(),
-                        "`class` belongs on `#[boyia_async_class]`, not on `#[boyia_async_builtin]`",
+                        "`class` belongs on `#[boyia_class]`, not on `#[boyia_async_builtin]`",
                     ));
                 }
                 other => {
@@ -175,7 +175,7 @@ impl Parse for SyncMethodConfig {
                 "class" => {
                     return Err(syn::Error::new(
                         key.span(),
-                        "`class` belongs on `#[boyia_async_class]`, not on `#[boyia_sync_builtin]`",
+                        "`class` belongs on `#[boyia_class]`, not on `#[boyia_sync_builtin]`",
                     ));
                 }
                 other => {
@@ -511,7 +511,7 @@ fn expand_class(class_config: &ClassConfig, module: &ItemMod) -> syn::Result<pro
         .as_ref()
         .map(|(_, items)| items.as_slice())
         .ok_or_else(|| {
-            syn::Error::new_spanned(module, "`#[boyia_async_class]` requires an inline module body")
+            syn::Error::new_spanned(module, "`#[boyia_class]` requires an inline module body")
         })?;
 
     let mut method_expansions = Vec::new();
@@ -521,14 +521,14 @@ fn expand_class(class_config: &ClassConfig, module: &ItemMod) -> syn::Result<pro
         let Item::Fn(func) = item else {
             return Err(syn::Error::new_spanned(
                 item,
-                "`#[boyia_async_class]` module may only contain builtin functions",
+                "`#[boyia_class]` module may only contain builtin functions",
             ));
         };
         let mut func = func.clone();
         let Some(kind) = take_attr_config(&mut func.attrs)? else {
             return Err(syn::Error::new_spanned(
                 func,
-                "functions inside `#[boyia_async_class]` must have `#[boyia_async_builtin(...)]` or `#[boyia_sync_builtin(...)]`",
+                "functions inside `#[boyia_class]` must have `#[boyia_async_builtin(...)]` or `#[boyia_sync_builtin(...)]`",
             ));
         };
 
@@ -551,7 +551,7 @@ fn expand_class(class_config: &ClassConfig, module: &ItemMod) -> syn::Result<pro
     if method_expansions.is_empty() {
         return Err(syn::Error::new_spanned(
             module,
-            "`#[boyia_async_class]` module must contain at least one builtin function",
+            "`#[boyia_class]` module must contain at least one builtin function",
         ));
     }
 
@@ -573,7 +573,7 @@ fn expand_class(class_config: &ClassConfig, module: &ItemMod) -> syn::Result<pro
 }
 
 /// ```ignore
-/// #[boyia_async_class(name = "File", registrar = builtin_file_class)]
+/// #[boyia_class(name = "File", registrar = builtin_file_class)]
 /// mod file_builtins {
 ///     #[boyia_async_builtin(native = file_read_native, method = "read")]
 ///     fn file_read(path: String) -> AsyncBuiltinResult { ... }
@@ -583,7 +583,7 @@ fn expand_class(class_config: &ClassConfig, module: &ItemMod) -> syn::Result<pro
 /// }
 /// ```
 #[proc_macro_attribute]
-pub fn boyia_async_class(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn boyia_class(attr: TokenStream, item: TokenStream) -> TokenStream {
     let class_config = parse_macro_input!(attr as ClassConfig);
     let module = parse_macro_input!(item as ItemMod);
 
