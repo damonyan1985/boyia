@@ -2,22 +2,14 @@
 
 #![allow(dead_code)]
 
-use crate::runner::r#async::{attach_method, register_async_builtin_class, AsyncBuiltinResult};
-use builtin_macro::boyia_async_builtin;
-use boyia_vm::{LUintPtr, BoyiaVM};
+use crate::runner::r#async::AsyncBuiltinResult;
+use builtin_macro::boyia_async_class;
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 use std::time::Duration;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
-
-pub fn builtin_https_class(vm: &mut BoyiaVM, gen_id: &mut dyn FnMut(&str) -> LUintPtr) {
-    register_async_builtin_class(vm, gen_id, "Https", |class_body, vm, gen_id| {
-        attach_method(gen_id, "load", https_load_native, class_body, vm);
-        attach_method(gen_id, "request", https_request_native, class_body, vm);
-    });
-}
 
 fn log_https_result(r: &AsyncBuiltinResult) {
     println!("https result: {}", r.log_preview());
@@ -95,12 +87,19 @@ fn https_result(url: &str, params: Option<&str>) -> AsyncBuiltinResult {
     }
 }
 
-#[boyia_async_builtin(native = https_load_native)]
-fn https_load(url: String) -> AsyncBuiltinResult {
-    https_result(&url, None)
-}
+#[boyia_async_class(name = "Https", registrar = builtin_https_class)]
+mod https_builtins {
+    #[boyia_async_builtin(native = https_load_native, method = "load")]
+    fn https_load(url: String) -> AsyncBuiltinResult {
+        https_result(&url, None)
+    }
 
-#[boyia_async_builtin(native = https_request_native, before = log_https_result)]
-fn https_request(url: String, params: String) -> AsyncBuiltinResult {
-    https_result(&url, Some(params.as_str()))
+    #[boyia_async_builtin(
+        native = https_request_native,
+        method = "request",
+        before = log_https_result
+    )]
+    fn https_request(url: String, params: String) -> AsyncBuiltinResult {
+        https_result(&url, Some(params.as_str()))
+    }
 }

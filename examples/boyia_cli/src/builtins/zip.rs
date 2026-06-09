@@ -2,9 +2,8 @@
 
 #![allow(dead_code)]
 
-use crate::runner::r#async::{attach_method, register_async_builtin_class, AsyncBuiltinResult};
-use builtin_macro::boyia_async_builtin;
-use boyia_vm::{LUintPtr, BoyiaVM};
+use crate::runner::r#async::AsyncBuiltinResult;
+use builtin_macro::boyia_async_class;
 use std::fs::{self, File};
 use std::io::copy;
 use std::path::{Path, PathBuf};
@@ -12,13 +11,6 @@ use walkdir::WalkDir;
 use zip::write::{FileOptions, ZipWriter};
 use zip::CompressionMethod;
 use zip::ZipArchive;
-
-pub fn builtin_zip_class(vm: &mut BoyiaVM, gen_id: &mut dyn FnMut(&str) -> LUintPtr) {
-    register_async_builtin_class(vm, gen_id, "Zip", |class_body, vm, gen_id| {
-        attach_method(gen_id, "compress", zip_compress_native, class_body, vm);
-        attach_method(gen_id, "extract", zip_extract_native, class_body, vm);
-    });
-}
 
 fn file_options<'a>(password: &'a str) -> FileOptions<'a, ()> {
     let base = FileOptions::<()>::default().compression_method(CompressionMethod::Deflated);
@@ -203,22 +195,25 @@ fn run_extract(src_zip: PathBuf, dest_dir: PathBuf, password: String) -> AsyncBu
     AsyncBuiltinResult::Ok { data: None }
 }
 
-#[boyia_async_builtin(native = zip_compress_native)]
-fn zip_compress(
-    src: String,
-    dest: String,
-    #[optional(default = "")]
-    password: String,
-) -> AsyncBuiltinResult {
-    run_compress(PathBuf::from(src), PathBuf::from(dest), password)
-}
+#[boyia_async_class(name = "Zip", registrar = builtin_zip_class)]
+mod zip_builtins {
+    #[boyia_async_builtin(native = zip_compress_native, method = "compress")]
+    fn zip_compress(
+        src: String,
+        dest: String,
+        #[optional(default = "")]
+        password: String,
+    ) -> AsyncBuiltinResult {
+        run_compress(PathBuf::from(src), PathBuf::from(dest), password)
+    }
 
-#[boyia_async_builtin(native = zip_extract_native)]
-fn zip_extract(
-    src: String,
-    dest: String,
-    #[optional(default = "")]
-    password: String,
-) -> AsyncBuiltinResult {
-    run_extract(PathBuf::from(src), PathBuf::from(dest), password)
+    #[boyia_async_builtin(native = zip_extract_native, method = "extract")]
+    fn zip_extract(
+        src: String,
+        dest: String,
+        #[optional(default = "")]
+        password: String,
+    ) -> AsyncBuiltinResult {
+        run_extract(PathBuf::from(src), PathBuf::from(dest), password)
+    }
 }
