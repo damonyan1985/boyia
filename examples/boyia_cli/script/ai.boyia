@@ -2,7 +2,14 @@ require("./util/util.boyia");
 
 class TensorTest {
     fun testTensor123() {
+
+        var arr100 = [];
+
         Util.log("run Tensor.tensor([1, 2, 3])");
+
+        var arr2 = [[1,2,3], [4,5,6], [7,8,9]];
+        var arr3 = arr2.get(2);
+        Util.log("Tensor end: " + arr3.get(1));
 
         var id = Tensor.tensor([1, 2, 3]);
         if (id == 0) {
@@ -24,5 +31,7 @@ class TensorTest {
         } else {
             Util.log("Tensor.destroy failed");
         }
+
+        
     }
 };
