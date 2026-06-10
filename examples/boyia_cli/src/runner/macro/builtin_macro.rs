@@ -324,6 +324,31 @@ fn strip_optional_from_func(func: &mut ItemFn) {
     }
 }
 
+fn is_option_json_value(ty: &Type) -> bool {
+    let Type::Path(TypePath { path, .. }) = ty else {
+        return false;
+    };
+    let Some(seg) = path.segments.last() else {
+        return false;
+    };
+    if seg.ident != "Option" {
+        return false;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return false;
+    };
+    args.args.len() == 1
+        && args
+            .args
+            .iter()
+            .next()
+            .and_then(|a| match a {
+                syn::GenericArgument::Type(inner) => Some(is_json_value_type(inner)),
+                _ => None,
+            })
+            == Some(true)
+}
+
 fn is_json_value_type(ty: &Type) -> bool {
     let Type::Path(TypePath { path, .. }) = ty else {
         return false;
@@ -350,7 +375,7 @@ fn async_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> 
             let #name = {
                 let raw = crate::some_or_end!(site.arg_boyia_value(#index));
                 crate::some_or_end!(unsafe {
-                    boyia_builtins::boyia_value_to_json(site.vm(), raw).ok()
+                    crate::runner::builtin_json::boyia_value_to_json(site.vm(), raw).ok()
                 })
             };
         });
@@ -406,6 +431,22 @@ fn sync_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> {
         });
     }
 
+    if is_json_value_type(&arg.ty) {
+        return Ok(quote! {
+            let #name = {
+                let raw = crate::some_or_end!({
+                    let val = unsafe {
+                        boyia_vm::get_local_value(#index, site.vm()) as *const boyia_vm::BoyiaValue
+                    };
+                    if val.is_null() { None } else { Some(val) }
+                });
+                crate::some_or_end!(unsafe {
+                    crate::runner::builtin_json::boyia_value_to_json(site.vm(), raw).ok()
+                })
+            };
+        });
+    }
+
     let extract = match type_last_ident(&arg.ty).as_deref() {
         Some("String") => quote! { crate::some_or_end!(site.arg_string(#index)) },
         Some("bool") => quote! { crate::some_or_end!(site.arg_bool(#index)) },
@@ -456,6 +497,9 @@ fn validate_sync_return(ty: &Type) -> syn::Result<()> {
         return Ok(());
     }
     if is_option_string(ty) {
+        return Ok(());
+    }
+    if is_option_json_value(ty) {
         return Ok(());
     }
     match type_last_ident(ty).as_deref() {
@@ -539,13 +583,26 @@ fn expand_sync_method(config: &SyncMethodConfig, func: &ItemFn) -> syn::Result<p
     let arg_names: Vec<_> = args.iter().map(|a| &a.name).collect();
     let arg_extractions: Vec<_> = args.iter().map(sync_arg_extraction).collect::<Result<_, _>>()?;
 
+    let finish = if is_option_json_value(&return_ty) {
+        quote! {
+            match #work_name( #( #arg_names, )* ) {
+                Some(j) => crate::runner::builtin_json::set_sync_json_return(j, site.vm()),
+                None => boyia_vm::OpHandleResult::kOpResultEnd,
+            }
+        }
+    } else {
+        quote! {
+            let result = #work_name( #( #arg_names, )* );
+            crate::runner::sync::set_sync_return(result, site.vm())
+        }
+    };
+
     Ok(quote! {
         #func
 
         fn #handler_name(site: &mut crate::runner::sync::SyncCallSite<'_>) -> boyia_vm::OpHandleResult {
             #( #arg_extractions )*
-            let result = #work_name( #( #arg_names, )* );
-            crate::runner::sync::set_sync_return(result, site.vm())
+            #finish
         }
 
         crate::define_sync_native!(#native_name, #min_locals, #handler_name);

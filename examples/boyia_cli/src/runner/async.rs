@@ -1,7 +1,8 @@
 //! Async builtin infrastructure: VM `unsafe` is confined here.
 //! Business modules (`file` / `https` / `zip`) use [CallSite], [AsyncCtx], [ScriptCallback] only.
 
-use boyia_builtins::{gen_builtin_class_function, json_to_boyia_value};
+use boyia_builtins::gen_builtin_class_function;
+use crate::runner::builtin_json::json_to_boyia_value;
 use boyia_runtime::{boyia_runtime_from_vm, BoyiaRuntime};
 use boyia_vm::{
     copy_object, create_global_class, create_native_string, create_string_object, gen_identifier_from_str,

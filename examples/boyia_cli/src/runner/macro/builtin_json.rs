@@ -1,15 +1,14 @@
-//! Json builtin: `parse` (JSON string ? Map / Array / String / number / null), `toString` (Boyia value ? JSON string).
-//! Aligns with `BoyiaLib.cpp` `jsonParseWithCJSON` / `toJsonString`; Map keys round-trip via [Runtime::name_for_identifier].
+//! Boyia value ↔ JSON conversion helpers for sync/async Json builtins.
 
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
-use crate::gen_builtin_class_function;
-use boyia_vm::{copy_object, create_global_class, create_native_string, create_string_object, gen_identifier_from_str,
-    get_boyia_class_id, get_function_count, get_local_size, get_local_value, get_runtime_from_vm,
+use boyia_vm::{
+    copy_object, create_string_object, gen_identifier_from_str, get_boyia_class_id, get_function_count,
     get_string_buffer, name_for_identifier, set_native_result, value_copy, vector_params_grow_if_full,
-    BoyiaClass, BoyiaFunction, BoyiaStr, BoyiaValue, BuiltinId, K_BOYIA_NULL, LIntPtr, NativePtr,
-    RealValue, ValueType, LInt, LInt8, LUintPtr, LVoid, OpHandleResult, BoyiaVM};
+    BoyiaClass, BoyiaFunction, BoyiaStr, BoyiaValue, BuiltinId, K_BOYIA_NULL, LInt, LInt8, LIntPtr,
+    LVoid, OpHandleResult, RealValue, ValueType, BoyiaVM,
+};
 use serde_json::{Map as JsonMap, Number, Value as JsonValue};
 
 unsafe fn boyia_str_to_slice<'a>(v: *const BoyiaValue) -> Option<&'a [u8]> {
@@ -26,7 +25,7 @@ unsafe fn boyia_str_to_slice<'a>(v: *const BoyiaValue) -> Option<&'a [u8]> {
 }
 
 unsafe fn alloc_string_value(vm: &mut BoyiaVM, s: &str) -> Option<BoyiaValue> {
-    let rt = get_runtime_from_vm(vm);
+    let rt = boyia_vm::get_runtime_from_vm(vm);
     if rt.is_null() {
         return None;
     }
@@ -222,6 +221,19 @@ pub unsafe fn json_to_boyia_value(vm: &mut BoyiaVM, j: &JsonValue) -> Result<Boy
     serde_to_boyia(vm, j)
 }
 
+/// Set sync `parse` native result from parsed JSON.
+pub fn set_sync_json_return(j: JsonValue, vm: &mut BoyiaVM) -> OpHandleResult {
+    unsafe {
+        match json_to_boyia_value(vm, &j) {
+            Ok(mut out) => {
+                set_native_result(&mut out, vm);
+                OpHandleResult::kOpResultSuccess
+            }
+            Err(_) => OpHandleResult::kOpResultEnd,
+        }
+    }
+}
+
 unsafe fn boyia_to_serde(vm: &mut BoyiaVM, v: *const BoyiaValue) -> Result<JsonValue, ()> {
     if v.is_null() {
         return Err(());
@@ -281,80 +293,5 @@ unsafe fn boyia_to_serde(vm: &mut BoyiaVM, v: *const BoyiaValue) -> Result<JsonV
             }
         }
         _ => Err(()),
-    }
-}
-
-unsafe fn json_parse_impl(vm: &mut BoyiaVM) -> OpHandleResult {
-    let size = get_local_size(vm);
-    if size < 3 {
-        return OpHandleResult::kOpResultEnd;
-    }
-    let json_val = get_local_value(1, vm) as *const BoyiaValue;
-    let Some(slice) = boyia_str_to_slice(json_val) else {
-        return OpHandleResult::kOpResultEnd;
-    };
-    let text = match std::str::from_utf8(slice) {
-        Ok(t) => t,
-        Err(_) => return OpHandleResult::kOpResultEnd,
-    };
-    let parsed: JsonValue = match serde_json::from_str(text) {
-        Ok(j) => j,
-        Err(_) => {
-            return OpHandleResult::kOpResultEnd;
-        }
-    };
-    let mut out = match serde_to_boyia(vm, &parsed) {
-        Ok(o) => o,
-        Err(_) => return OpHandleResult::kOpResultEnd,
-    };
-    set_native_result(&mut out, vm);
-    OpHandleResult::kOpResultSuccess
-}
-
-unsafe fn json_to_string_impl(vm: &mut BoyiaVM) -> OpHandleResult {
-    let size = get_local_size(vm);
-    if size < 3 {
-        return OpHandleResult::kOpResultEnd;
-    }
-    let obj = get_local_value(1, vm) as *const BoyiaValue;
-    let sj = match boyia_to_serde(vm, obj) {
-        Ok(j) => j,
-        Err(_) => return OpHandleResult::kOpResultEnd,
-    };
-    let s = match serde_json::to_string(&sj) {
-        Ok(s) => s,
-        Err(_) => return OpHandleResult::kOpResultEnd,
-    };
-    let boxed = s.into_bytes().into_boxed_slice();
-    let len = boxed.len() as LInt;
-    let ptr = Box::into_raw(boxed) as *mut u8 as *mut LInt8;
-    let mut val = BoyiaValue {
-        mNameKey: 0,
-        mValueType: ValueType::BY_INT,
-        mValue: RealValue { mIntVal: 0 },
-    };
-    create_native_string(&mut val, ptr, len, vm);
-    set_native_result(&mut val, vm);
-    OpHandleResult::kOpResultSuccess
-}
-
-/// Register global class `Json` with `parse` and `toString` (static-style methods on class body).
-pub fn builtin_json_class<F>(vm: &mut BoyiaVM, gen_id: &mut F)
-where
-    F: FnMut(&str) -> LUintPtr,
-{
-    let json_key = gen_id("Json");
-    let class_ref = unsafe { create_global_class(json_key, vm) } as *mut BoyiaValue;
-    if class_ref.is_null() {
-        return;
-    }
-    unsafe {
-        (*class_ref).mValue.mObj.mSuper = K_BOYIA_NULL;
-        let class_body = (*class_ref).mValue.mObj.mPtr as *mut BoyiaFunction;
-        if class_body.is_null() || (*class_body).mParams.is_null() {
-            return;
-        }
-        gen_builtin_class_function(gen_id("parse"), json_parse_impl as NativePtr, class_body, vm);
-        gen_builtin_class_function(gen_id("toString"), json_to_string_impl as NativePtr, class_body, vm);
     }
 }

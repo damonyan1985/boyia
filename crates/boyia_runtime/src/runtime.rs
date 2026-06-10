@@ -7,7 +7,7 @@
 use crate::id_creator::IdCreator;
 use crate::info::BoyiaCompileInfo;
 use boyia_builtins::{
-    builtin_array_class, builtin_json_class, builtin_map_class, builtin_micro_task_class, builtin_string_class,
+    builtin_array_class, builtin_map_class, builtin_micro_task_class, builtin_string_class,
 };
 use boyia_vm::{
     cache_vm_code, consume_micro_task, delete_data, execute_global_code,
@@ -122,8 +122,6 @@ impl BoyiaRuntime {
         builtin_micro_task_class(vm, &mut gen_id);
         eprintln!("[init] 7 builtin_array_class");
         builtin_array_class(vm, &mut gen_id);
-        eprintln!("[init] 7b builtin_json_class");
-        builtin_json_class(vm, &mut gen_id);
 
         eprintln!("[init] 8 done");
     }
