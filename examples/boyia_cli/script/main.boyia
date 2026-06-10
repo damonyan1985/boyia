@@ -302,14 +302,14 @@ class PrinterExt extends Printer {
     prop async jsonAsyncParse(jsonText) {
         Util.newMicrotask(fun(resolve) {
             Util.log("run jsonAsyncParse");
-            JsonBuiltin.async_parse(jsonText, resolve);
+            JsonBuiltin.asyncParse(jsonText, resolve);
         });
     }
 
     prop async jsonAsyncToString(value) {
         Util.newMicrotask(fun(resolve) {
             Util.log("run jsonAsyncToString");
-            JsonBuiltin.async_to_string(value, resolve);
+            JsonBuiltin.asyncToString(value, resolve);
         });
     }
 
@@ -337,22 +337,22 @@ class PrinterExt extends Printer {
         var str = Json.toString(body);
         Util.log("Json String is " + str);
 
-        Util.log("jsonRead test JsonBuiltin.async_parse(text)");
+        Util.log("jsonRead test JsonBuiltin.asyncParse(text)");
         var asyncParseText = (await this.jsonAsyncParse(text));
         if (asyncParseText.get("status") == "ok") {
             var parsed = asyncParseText.get("data");
-            Util.log("async_parse text nickname: " + parsed.nickname.get(0));
-            Util.log("async_parse text height: " + parsed.height);
+            Util.log("asyncParse text nickname: " + parsed.nickname.get(0));
+            Util.log("asyncParse text height: " + parsed.height);
             Util.log("jsonAsyncParse(text) ok");
         } else {
             Util.log("jsonAsyncParse(text): " + asyncParseText.get("message"));
         }
 
-        Util.log("jsonRead test JsonBuiltin.async_to_string(body)");
+        Util.log("jsonRead test JsonBuiltin.asyncToString(body)");
         var asyncToString = (await this.jsonAsyncToString(body));
         if (asyncToString.get("status") == "ok") {
             var asyncStr = asyncToString.get("data");
-            Util.log("JsonBuiltin.async_to_string: " + asyncStr);
+            Util.log("JsonBuiltin.asyncToString: " + asyncStr);
             if (asyncStr == str) {
                 Util.log("jsonAsyncToString ok (matches sync Json.toString)");
             } else {

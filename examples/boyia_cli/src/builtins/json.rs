@@ -10,24 +10,24 @@ struct JsonBuiltin;
 
 #[boyia_class(name = "JsonBuiltin", registrar = builtin_json_builtin_class)]
 impl JsonBuiltin {
-    #[boyia_async_builtin(native = json_async_parse_native, method = "async_parse")]
+    #[boyia_async_builtin(native = json_async_parse_native, method = "asyncParse")]
     fn async_parse(text: String) -> AsyncBuiltinResult {
         match serde_json::from_str::<JsonValue>(&text) {
             Ok(value) => AsyncBuiltinResult::OkJson(value),
             Err(err) => AsyncBuiltinResult::Fail {
-                message: format!("JsonBuiltin.async_parse: {err}"),
+                message: format!("JsonBuiltin.asyncParse: {err}"),
             },
         }
     }
 
-    #[boyia_async_builtin(native = json_async_to_string_native, method = "async_to_string")]
+    #[boyia_async_builtin(native = json_async_to_string_native, method = "asyncToString")]
     fn async_to_string(value: JsonValue) -> AsyncBuiltinResult {
         match serde_json::to_string(&value) {
             Ok(text) => AsyncBuiltinResult::Ok {
                 data: Some(text),
             },
             Err(err) => AsyncBuiltinResult::Fail {
-                message: format!("JsonBuiltin.async_to_string: {err}"),
+                message: format!("JsonBuiltin.asyncToString: {err}"),
             },
         }
     }
