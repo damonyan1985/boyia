@@ -588,7 +588,7 @@ fn validate_sync_return(ty: &Type) -> syn::Result<()> {
         return Ok(());
     }
     match type_last_ident(ty).as_deref() {
-        Some("bool" | "String" | "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" | "f32" | "f64") => {
+        Some("bool" | "String" | "Handle" | "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" | "f32" | "f64") => {
             Ok(())
         }
         Some(other) => Err(syn::Error::new_spanned(

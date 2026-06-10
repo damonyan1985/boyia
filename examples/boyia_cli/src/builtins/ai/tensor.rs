@@ -7,11 +7,17 @@
 use builtin_macro::boyia_class;
 use crate::runner::builtin_vec::NestedVec;
 use rand::Rng;
-use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
+/// 1-based id; maps to [`TensorRegistry::slots`] at index `handle - 1` (`0` = invalid).
+pub type Handle = usize;
+
 /// Reserved handle: creation failed or invalid id.
-pub const TENSOR_HANDLE_INVALID: usize = 0;
+pub const TENSOR_HANDLE_INVALID: Handle = 0;
+
+fn slot_index(handle: Handle) -> Option<usize> {
+    handle.checked_sub(1)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TensorDtype {
@@ -274,41 +280,50 @@ impl TensorStorage {
     }
 }
 
+/// Handle-indexed tensor table: `handle - 1` is the index into [`TensorRegistry::slots`].
 struct TensorRegistry {
-    next_id: usize,
-    tensors: HashMap<usize, BoyiaTensor>,
+    slots: Vec<Option<BoyiaTensor>>,
+    /// Reusable 0-based slot indices (not handles).
+    free_list: Vec<usize>,
 }
 
 impl TensorRegistry {
     fn new() -> Self {
         Self {
-            next_id: 1,
-            tensors: HashMap::new(),
+            slots: Vec::new(),
+            free_list: Vec::new(),
         }
     }
 
-    fn insert(&mut self, tensor: BoyiaTensor) -> usize {
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1);
-        if self.next_id == TENSOR_HANDLE_INVALID {
-            self.next_id = 1;
+    fn insert(&mut self, tensor: BoyiaTensor) -> Handle {
+        if let Some(idx) = self.free_list.pop() {
+            self.slots[idx] = Some(tensor);
+            return idx + 1;
         }
-        self.tensors.insert(id, tensor);
-        id
+        let idx = self.slots.len();
+        self.slots.push(Some(tensor));
+        idx + 1
     }
 
-    fn get(&self, id: usize) -> Option<&BoyiaTensor> {
-        if id == TENSOR_HANDLE_INVALID {
-            return None;
-        }
-        self.tensors.get(&id)
+    fn get(&self, handle: Handle) -> Option<&BoyiaTensor> {
+        let idx = slot_index(handle)?;
+        self.slots.get(idx).and_then(|slot| slot.as_ref())
     }
 
-    fn remove(&mut self, id: usize) -> bool {
-        if id == TENSOR_HANDLE_INVALID {
+    fn remove(&mut self, handle: Handle) -> bool {
+        let idx = match slot_index(handle) {
+            Some(i) => i,
+            None => return false,
+        };
+        let Some(slot) = self.slots.get_mut(idx) else {
             return false;
+        };
+        if slot.take().is_some() {
+            self.free_list.push(idx);
+            true
+        } else {
+            false
         }
-        self.tensors.remove(&id).is_some()
     }
 }
 
@@ -317,30 +332,30 @@ fn registry() -> &'static Mutex<TensorRegistry> {
     REG.get_or_init(|| Mutex::new(TensorRegistry::new()))
 }
 
-pub fn store_tensor(tensor: BoyiaTensor) -> usize {
+pub fn store_tensor(tensor: BoyiaTensor) -> Handle {
     let Ok(mut reg) = registry().lock() else {
         return TENSOR_HANDLE_INVALID;
     };
     reg.insert(tensor)
 }
 
-pub fn get_tensor(id: usize) -> Option<BoyiaTensor> {
+pub fn get_tensor(id: Handle) -> Option<BoyiaTensor> {
     let reg = registry().lock().ok()?;
     reg.get(id).cloned()
 }
 
-pub fn destroy_tensor(id: usize) -> bool {
+pub fn destroy_tensor(id: Handle) -> bool {
     let Ok(mut reg) = registry().lock() else {
         return false;
     };
     reg.remove(id)
 }
 
-fn parse_handle(id: i64) -> Option<usize> {
+fn parse_handle(id: i64) -> Option<Handle> {
     if id <= 0 {
         return None;
     }
-    Some(id as usize)
+    Some(id as Handle)
 }
 
 fn format_preview<I>(values: I, len: usize, max_elems: usize) -> String
@@ -425,7 +440,7 @@ impl TensorBuiltins {
         shape: Vec<usize>,
         #[optional(default = "float32")]
         dtype: String,
-    ) -> usize {
+    ) -> Handle {
         let Some((shape, dtype)) = parse_factory_args(shape, &dtype) else {
             return TENSOR_HANDLE_INVALID;
         };
@@ -439,7 +454,7 @@ impl TensorBuiltins {
         shape: Vec<usize>,
         #[optional(default = "float32")]
         dtype: String,
-    ) -> usize {
+    ) -> Handle {
         let Some((shape, dtype)) = parse_factory_args(shape, &dtype) else {
             return TENSOR_HANDLE_INVALID;
         };
@@ -453,7 +468,7 @@ impl TensorBuiltins {
         shape: Vec<usize>,
         #[optional(default = "float32")]
         dtype: String,
-    ) -> usize {
+    ) -> Handle {
         let Some((shape, dtype)) = parse_factory_args(shape, &dtype) else {
             return TENSOR_HANDLE_INVALID;
         };
@@ -468,7 +483,7 @@ impl TensorBuiltins {
         fill_value: f64,
         #[optional(default = "float32")]
         dtype: String,
-    ) -> usize {
+    ) -> Handle {
         let Some((shape, dtype)) = parse_factory_args(shape, &dtype) else {
             return TENSOR_HANDLE_INVALID;
         };
@@ -483,7 +498,7 @@ impl TensorBuiltins {
         data: Vec<NestedVec>,
         #[optional(default = "float32")]
         dtype: String,
-    ) -> usize {
+    ) -> Handle {
         eprintln!(
             "[tensor_tensor] enter: data_len={}, dtype={:?}",
             data.len(),
@@ -505,7 +520,7 @@ impl TensorBuiltins {
         end: i64,
         #[optional(default = "float32")]
         dtype: String,
-    ) -> usize {
+    ) -> Handle {
         let Some(dtype) = TensorDtype::parse(&dtype) else {
             return TENSOR_HANDLE_INVALID;
         };
@@ -520,7 +535,7 @@ impl TensorBuiltins {
         end: i64,
         #[optional(default = "float32")]
         dtype: String,
-    ) -> usize {
+    ) -> Handle {
         let Some(dtype) = TensorDtype::parse(&dtype) else {
             return TENSOR_HANDLE_INVALID;
         };
@@ -536,7 +551,7 @@ impl TensorBuiltins {
         step: i64,
         #[optional(default = "float32")]
         dtype: String,
-    ) -> usize {
+    ) -> Handle {
         let Some(dtype) = TensorDtype::parse(&dtype) else {
             return TENSOR_HANDLE_INVALID;
         };
@@ -550,7 +565,7 @@ impl TensorBuiltins {
         shape: Vec<usize>,
         #[optional(default = "float32")]
         dtype: String,
-    ) -> usize {
+    ) -> Handle {
         let Some((shape, dtype)) = parse_factory_args(shape, &dtype) else {
             return TENSOR_HANDLE_INVALID;
         };

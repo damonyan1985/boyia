@@ -4,6 +4,8 @@ class TensorTest {
     fun testTensor123() {
 
         var arr100 = [];
+        var arr101 = ["789", "100"];
+        Util.log("TensorTest.testTensor123 begin: " + arr101.get(0));
 
         Util.log("run Tensor.tensor([1, 2, 3])");
 
