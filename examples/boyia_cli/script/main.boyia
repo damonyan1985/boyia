@@ -1,4 +1,5 @@
 require("./util/util.boyia");
+require("./ai.boyia");
 
 class Printer {
     fun say(msg) {
@@ -363,6 +364,8 @@ class PrinterExt extends Printer {
         }
 
         this.testIsAbsolute();
+
+        TensorTest.testTensor123();
     }
 }
 

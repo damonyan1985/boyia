@@ -349,6 +349,56 @@ fn is_option_json_value(ty: &Type) -> bool {
             == Some(true)
 }
 
+fn vec_element_type<'a>(ty: &'a Type) -> Option<&'a Type> {
+    let Type::Path(TypePath { path, .. }) = ty else {
+        return None;
+    };
+    let seg = path.segments.last()?;
+    if seg.ident != "Vec" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return None;
+    };
+    match args.args.first()? {
+        syn::GenericArgument::Type(inner) => Some(inner),
+        _ => None,
+    }
+}
+
+fn is_vec_usize(ty: &Type) -> bool {
+    vec_element_type(ty).is_some_and(|inner| type_last_ident(inner).as_deref() == Some("usize"))
+}
+
+fn is_vec_nested_vec(ty: &Type) -> bool {
+    vec_element_type(ty).is_some_and(|inner| type_last_ident(inner).as_deref() == Some("NestedVec"))
+}
+
+fn is_option_vec_usize(ty: &Type) -> bool {
+    let Type::Path(TypePath { path, .. }) = ty else {
+        return false;
+    };
+    let Some(seg) = path.segments.last() else {
+        return false;
+    };
+    if seg.ident != "Option" {
+        return false;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return false;
+    };
+    args.args.len() == 1
+        && args
+            .args
+            .iter()
+            .next()
+            .and_then(|a| match a {
+                syn::GenericArgument::Type(inner) => Some(is_vec_usize(inner)),
+                _ => None,
+            })
+            == Some(true)
+}
+
 fn is_json_value_type(ty: &Type) -> bool {
     let Type::Path(TypePath { path, .. }) = ty else {
         return false;
@@ -431,6 +481,38 @@ fn sync_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> {
         });
     }
 
+    if is_vec_usize(&arg.ty) {
+        return Ok(quote! {
+            let #name = {
+                let raw = crate::some_or_end!({
+                    let val = unsafe {
+                        boyia_vm::get_local_value(#index, site.vm()) as *const boyia_vm::BoyiaValue
+                    };
+                    if val.is_null() { None } else { Some(val) }
+                });
+                crate::some_or_end!(unsafe {
+                    crate::runner::builtin_vec::boyia_value_to_vec_usize(site.vm(), raw).ok()
+                })
+            };
+        });
+    }
+
+    if is_vec_nested_vec(&arg.ty) {
+        return Ok(quote! {
+            let #name = {
+                let raw = crate::some_or_end!({
+                    let val = unsafe {
+                        boyia_vm::get_local_value(#index, site.vm()) as *const boyia_vm::BoyiaValue
+                    };
+                    if val.is_null() { None } else { Some(val) }
+                });
+                crate::some_or_end!(unsafe {
+                    crate::runner::builtin_vec::boyia_value_to_nested_vec(site.vm(), raw).ok()
+                })
+            };
+        });
+    }
+
     if is_json_value_type(&arg.ty) {
         return Ok(quote! {
             let #name = {
@@ -459,7 +541,7 @@ fn sync_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> {
             return Err(syn::Error::new_spanned(
                 &arg.ty,
                 format!(
-                    "unsupported parameter type `{other}`; use String, bool, integer, float, or Option<String>"
+                    "unsupported parameter type `{other}`; use String, bool, integer, float, Vec<usize>, Vec<NestedVec>, or Option<String>"
                 ),
             ));
         }
@@ -502,6 +584,9 @@ fn validate_sync_return(ty: &Type) -> syn::Result<()> {
     if is_option_json_value(ty) {
         return Ok(());
     }
+    if is_option_vec_usize(ty) {
+        return Ok(());
+    }
     match type_last_ident(ty).as_deref() {
         Some("bool" | "String" | "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" | "f32" | "f64") => {
             Ok(())
@@ -517,6 +602,7 @@ fn validate_sync_return(ty: &Type) -> syn::Result<()> {
 }
 
 fn expand_async_method(config: &AsyncMethodConfig, func: &ItemFn) -> syn::Result<proc_macro2::TokenStream> {
+    let args = collect_args(func)?;
     let mut func = func.clone();
     strip_optional_from_func(&mut func);
 
@@ -524,9 +610,11 @@ fn expand_async_method(config: &AsyncMethodConfig, func: &ItemFn) -> syn::Result
     let schedule_name = format_ident!("schedule_{}", work_name);
     let handler_name = format_ident!("{}_handler", work_name);
     let native_name = &config.native;
-
-    let args = collect_args(&func)?;
-    let min_locals = (args.len() + 2) as i32;
+    let required_args = args
+        .iter()
+        .filter(|a| a.optional_default.is_none())
+        .count();
+    let min_locals = (required_args + 2) as i32;
     let arg_names: Vec<_> = args.iter().map(|a| &a.name).collect();
     let arg_types: Vec<_> = args.iter().map(|a| &a.ty).collect();
     let arg_extractions: Vec<_> = args
@@ -565,6 +653,7 @@ fn expand_async_method(config: &AsyncMethodConfig, func: &ItemFn) -> syn::Result
 }
 
 fn expand_sync_method(config: &SyncMethodConfig, func: &ItemFn) -> syn::Result<proc_macro2::TokenStream> {
+    let args = collect_args(func)?;
     let mut func = func.clone();
     strip_optional_from_func(&mut func);
 
@@ -577,13 +666,22 @@ fn expand_sync_method(config: &SyncMethodConfig, func: &ItemFn) -> syn::Result<p
     let work_name = &func.sig.ident;
     let handler_name = format_ident!("{}_handler", work_name);
     let native_name = &config.native;
-
-    let args = collect_args(&func)?;
-    let min_locals = (args.len() + 1) as i32;
+    let required_args = args
+        .iter()
+        .filter(|a| a.optional_default.is_none())
+        .count();
+    let min_locals = (required_args + 1) as i32;
     let arg_names: Vec<_> = args.iter().map(|a| &a.name).collect();
     let arg_extractions: Vec<_> = args.iter().map(sync_arg_extraction).collect::<Result<_, _>>()?;
 
-    let finish = if is_option_json_value(&return_ty) {
+    let finish = if is_option_vec_usize(&return_ty) {
+        quote! {
+            match #work_name( #( #arg_names, )* ) {
+                Some(v) => crate::runner::builtin_vec::set_sync_vec_usize_return(v, site.vm()),
+                None => boyia_vm::OpHandleResult::kOpResultEnd,
+            }
+        }
+    } else if is_option_json_value(&return_ty) {
         quote! {
             match #work_name( #( #arg_names, )* ) {
                 Some(j) => crate::runner::builtin_json::set_sync_json_return(j, site.vm()),

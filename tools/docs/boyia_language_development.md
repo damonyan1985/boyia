@@ -124,7 +124,7 @@ Boyia 的 builtin 分为两层：
 
 CLI 侧示例与注册入口：
 
-- 业务定义：`examples/boyia_cli/src/builtins/`（如 `file.rs`、`json.rs`）
+- 业务定义：`examples/boyia_cli/src/builtins/utility/`（如 `file.rs`、`json.rs`）
 - 注册表：`examples/boyia_cli/src/builtins/mod.rs` 中的 `DEFAULT_BUILTINS`
 - 异步/同步基础设施：`examples/boyia_cli/src/runner/async.rs`、`sync.rs`
 - 过程宏：`examples/boyia_cli/src/runner/macro/builtin_macro.rs`
@@ -182,10 +182,10 @@ impl FileBuiltins {
 ```rust
 // examples/boyia_cli/src/builtins/mod.rs
 pub const DEFAULT_BUILTINS: &[BuiltinRegistrar] = &[
-    https::builtin_https_class,
-    file::builtin_file_class,
-    zip::builtin_zip_class,
-    json::builtin_json_class,
+    utility::https::builtin_https_class,
+    utility::file::builtin_file_class,
+    utility::zip::builtin_zip_class,
+    utility::json::builtin_json_class,
 ];
 ```
 
@@ -259,7 +259,7 @@ class Demo {
 
 | 文件 | 职责 |
 |------|------|
-| `builtins/json.rs` | `#[boyia_class]` 定义：`parse`、`toString`、`asyncParse`、`asyncToString` |
+| `builtins/utility/json.rs` | `#[boyia_class]` 定义：`parse`、`toString`、`asyncParse`、`asyncToString` |
 | `runner/macro/builtin_json.rs` | Boyia 值 ↔ `serde_json::Value` 转换，供宏与 `AsyncBuiltinResult::OkJson` 使用 |
 
 脚本 API：

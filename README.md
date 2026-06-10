@@ -146,7 +146,7 @@ boyia/
 ├── examples/
 │   ├── boyia_cli/       # ★ 推荐入口：运行脚本 + CLI 内置类
 │   │   ├── script/main.boyia
-│   │   └── src/builtins/   # File/Https/Zip/Json 的 Rust 实现
+│   │   └── src/builtins/utility/   # File/Https/Zip/Json 的 Rust 实现
 │   └── boyia_lsp/       # .boyia 语言的 LSP 服务（可选）
 └── tools/docs/
     └── boyia_language_development.md   # 语法与扩展开发文档
@@ -154,7 +154,7 @@ boyia/
 
 ## 用 Rust 扩展 Boyia
 
-- **CLI 内置类**：在 `examples/boyia_cli/src/builtins/` 用 `#[boyia_class]`、`#[boyia_async_builtin]`、`#[boyia_sync_builtin]` 声明，并加入 `builtins/mod.rs` 的 `DEFAULT_BUILTINS`。
+- **CLI 内置类**：在 `examples/boyia_cli/src/builtins/utility/` 用 `#[boyia_class]`、`#[boyia_async_builtin]`、`#[boyia_sync_builtin]` 声明，并加入 `builtins/mod.rs` 的 `DEFAULT_BUILTINS`。
 - **通用 native 函数**：参考 `crates/boyia_lib`，在 runtime 中注册到 native 表。
 - **JSON 转换辅助**：`examples/boyia_cli/src/runner/macro/builtin_json.rs`。
 

@@ -1,0 +1,28 @@
+require("./util/util.boyia");
+
+class TensorTest {
+    fun testTensor123() {
+        Util.log("run Tensor.tensor([1, 2, 3])");
+
+        var id = Tensor.tensor([1, 2, 3]);
+        if (id == 0) {
+            Util.log("Tensor.tensor([1, 2, 3]) failed");
+            return;
+        }
+
+        Util.log("tensor id: " + id);
+        Util.log(Tensor.toString(id));
+
+        var shape = Tensor.shape(id);
+        Util.log("shape size: " + shape.size());
+        if (shape.size() > 0) {
+            Util.log("shape[0]: " + shape.get(0));
+        }
+
+        if (Tensor.destroy(id)) {
+            Util.log("Tensor.destroy ok");
+        } else {
+            Util.log("Tensor.destroy failed");
+        }
+    }
+};
