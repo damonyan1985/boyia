@@ -144,6 +144,8 @@ class PrinterExt extends Printer {
         var test = "hello : " + payload;
         Util.log("loadAsync result: " + test);
 
+        this.testString();
+
         return payload;
     }
 
@@ -366,6 +368,15 @@ class PrinterExt extends Printer {
         this.testIsAbsolute();
 
         TensorTest.testTensor123();
+    }
+
+    prop fun testString() {
+        var strTest = "{ \"name\" : \"bob\", \"pwd\": 123 }";
+        Util.log("strTest : " + strTest);
+
+        var userInfo = Json.parse(strTest);
+
+        Util.log("userInfo.name : " + userInfo.name);
     }
 }
 

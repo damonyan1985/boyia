@@ -407,7 +407,8 @@ unsafe fn get_logic_value(cs: &mut CompileState) -> bool {
     false
 }
 
-/// GetStringValue: match C++ only '"', stop at '"' or '\r'. mTokenName.mPtr = first char inside (after quote), mLen = len+2.
+/// GetStringValue: match C++ GetStringValue. Keep source bytes in the token; on \", skip the pair
+/// so the escaped quote does not terminate the string. Unescape in add_string_from_token.
 unsafe fn get_string_value(cs: &mut CompileState) -> bool {
     if cur_byte(cs) != b'"' {
         return false;
@@ -415,13 +416,23 @@ unsafe fn get_string_value(cs: &mut CompileState) -> bool {
     add_column(cs, 1);
     cs.mToken.mTokenName.mPtr = cs.mProg;
     let mut len = 0i32;
-    while cur_byte(cs) != b'"' && cur_byte(cs) != b'\r' && cur_byte(cs) != 0 {
+    while cur_byte(cs) != 0 && cur_byte(cs) != b'\r' {
+        if cur_byte(cs) == b'\\' {
+            len += 1;
+            add_column(cs, 1);
+            if cur_byte(cs) != 0 {
+                len += 1;
+                add_column(cs, 1);
+            }
+            continue;
+        }
+        if cur_byte(cs) == b'"' {
+            break;
+        }
         len += 1;
         add_column(cs, 1);
     }
-    if cur_byte(cs) == b'\r' {
-        add_column(cs, 1);
-    } else {
+    if cur_byte(cs) == b'"' {
         add_column(cs, 1);
     }
     cs.mToken.mTokenType = TokenType::STRING_VALUE;
@@ -525,24 +536,65 @@ unsafe fn next_token(cs: &mut CompileState) {
     }
 }
 
-/// Add string from current token (STRING_VALUE) to VM string table; return index. C++ CopyStringFromToken: mPtr points to content (after opening quote), mLen = content_len+2.
+/// Add string from current token (STRING_VALUE) to VM string table; return index.
+/// C++ CopyStringFromToken: unescape \", \\, \n, \t, \r; unknown \X keeps both bytes.
 unsafe fn add_string_from_token(cs: &mut CompileState) -> Option<usize> {
     let st = &mut cs.mVm.mStrTable;
     let name = &cs.mToken.mTokenName;
-    let inner_len = (name.mLen - 2).max(0) as usize;
+    let raw_len = (name.mLen - 2).max(0) as usize;
     let src = name.mPtr;
-    let layout = std::alloc::Layout::array::<LInt8>(inner_len + 1).ok()?;
+    let alloc_len = if raw_len > 0 { raw_len } else { 1 };
+    let layout = std::alloc::Layout::array::<LInt8>(alloc_len + 1).ok()?;
     let ptr = std::alloc::alloc(layout) as *mut LInt8;
     if ptr.is_null() {
         return None;
     }
-    for i in 0..inner_len {
-        *ptr.add(i) = *src.add(i);
+    let mut out_idx = 0usize;
+    let mut i = 0usize;
+    while i < raw_len {
+        if (*src.add(i) as u8) == b'\\' && i + 1 < raw_len {
+            match *src.add(i + 1) as u8 {
+                b'"' => {
+                    *ptr.add(out_idx) = b'"' as LInt8;
+                    out_idx += 1;
+                    i += 2;
+                    continue;
+                }
+                b'\\' => {
+                    *ptr.add(out_idx) = b'\\' as LInt8;
+                    out_idx += 1;
+                    i += 2;
+                    continue;
+                }
+                b'n' => {
+                    *ptr.add(out_idx) = b'\n' as LInt8;
+                    out_idx += 1;
+                    i += 2;
+                    continue;
+                }
+                b't' => {
+                    *ptr.add(out_idx) = b'\t' as LInt8;
+                    out_idx += 1;
+                    i += 2;
+                    continue;
+                }
+                b'r' => {
+                    *ptr.add(out_idx) = b'\r' as LInt8;
+                    out_idx += 1;
+                    i += 2;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        *ptr.add(out_idx) = *src.add(i);
+        out_idx += 1;
+        i += 1;
     }
-    *ptr.add(inner_len) = 0;
+    *ptr.add(out_idx) = 0;
     st.push_str(BoyiaStr {
         mPtr: ptr,
-        mLen: inner_len as LInt,
+        mLen: out_idx as LInt,
     })
 }
 
