@@ -377,6 +377,11 @@ class PrinterExt extends Printer {
         var userInfo = Json.parse(strTest);
 
         Util.log("userInfo.name : " + userInfo.name);
+
+        var config = new(Config);
+        config.setTimeout(5333);
+
+        Util.log("config.getTimeout() : " + config.getTimeout());
     }
 }
 

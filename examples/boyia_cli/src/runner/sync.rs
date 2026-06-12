@@ -2,8 +2,8 @@
 
 use boyia_vm::{
     create_native_string, create_string_object, get_local_size, get_local_value, set_int_result,
-    set_native_result, BoyiaClass, BoyiaValue, BuiltinId, K_BOYIA_NULL, OpHandleResult,
-    RealValue, ValueType, LInt, LInt8, LIntPtr, BoyiaVM,
+    set_native_result, BoyiaClass, BoyiaFunction, BoyiaValue, BuiltinId, K_BOYIA_NULL,
+    OpHandleResult, RealValue, ValueType, LInt, LInt8, LIntPtr, BoyiaVM,
 };
 use std::str;
 
@@ -24,6 +24,21 @@ impl<'a> SyncCallSite<'a> {
 
     pub fn vm(&mut self) -> &mut BoyiaVM {
         self.vm
+    }
+
+    /// `this` for `BY_NAV_FUNC` builtins: last local pushed before the native runs.
+    pub fn this_function(&mut self) -> Option<*mut BoyiaFunction> {
+        let val = unsafe { get_local_value(self.size - 1, self.vm) as *const BoyiaValue };
+        if val.is_null() {
+            return None;
+        }
+        unsafe {
+            let ptr = (*val).mValue.mObj.mPtr;
+            if ptr == K_BOYIA_NULL {
+                return None;
+            }
+            Some(ptr as *mut BoyiaFunction)
+        }
     }
 
     pub fn arg_string(&mut self, index: LInt) -> Option<String> {
