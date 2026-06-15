@@ -242,7 +242,7 @@ load/store 使用编译期常量索引，避免运行时按名查找。
 Rust 不允许一个 attribute 同时挂在 struct 和 impl 上。常见做法：
 
 ```rust
-// 做法 1：字段宏在 struct，class 宏在 impl（已实现，见 `builtins/utility/config.rs`）
+// 做法 1：字段宏在 struct，class 宏在 impl（已实现，见 `builtins/external/config.rs`）
 #[boyia_fields]
 struct ConfigBuiltins {
     #[boyia_default = "false"]
