@@ -13,6 +13,8 @@ use boyia_vm::{
     get_runtime_from_vm, get_string_buffer_from_body, iterate_micro_task, BoyiaFunction, BoyiaVM,
     BoyiaValue, BuiltinId, LInt, LIntPtr, LVoid, ValueType, LUint8,
 };
+
+use crate::native_gc::{drop_native, flag as native_gc_flag, mark as native_gc_mark};
 use std::ptr;
 
 const MIGRATE_SIZE: usize = 6 * 1024;
@@ -91,17 +93,21 @@ fn set_migrate_flag(fun: *mut BoyiaFunction) {
     }
 }
 
-// Native/platform hooks (extern in C++; stubs by default).
+// Native/platform hooks: vtable dispatch via `crate::native_gc`.
 #[inline]
-unsafe fn mark_native_object(_addr: LIntPtr, _color: LInt) {}
-
-#[inline]
-fn native_object_flag(_addr: *mut LVoid) -> LInt {
-    K_BOYIA_GC_WHITE
+unsafe fn mark_native_object(addr: LIntPtr, color: LInt) {
+    native_gc_mark(addr as *mut LVoid, color);
 }
 
 #[inline]
-unsafe fn native_delete(_addr: *mut LVoid) {}
+fn native_object_flag(addr: *mut LVoid) -> LInt {
+    native_gc_flag(addr)
+}
+
+#[inline]
+unsafe fn native_delete(addr: *mut LVoid) {
+    drop_native(addr);
+}
 
 #[inline]
 unsafe fn free_buffer(_ptr: *mut LUint8, _size: LInt) {

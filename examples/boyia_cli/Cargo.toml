@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 boyia_builtins = { path = "../../crates/boyia_builtins" }
+boyia_gc = { path = "../../crates/boyia_gc" }
 boyia_runtime = { path = "../../crates/boyia_runtime" }
 boyia_vm = { path = "../../crates/boyia_vm" }
 reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "rustls"] }

@@ -1,6 +1,6 @@
 //! `#[boyia_class]` — compile-time class registrar with unrolled `attach_method` calls.
 //! Child fns use `#[boyia_async_builtin]` or `#[boyia_sync_builtin]` (parsed by this macro).
-//! `#[boyia_fields]` on a struct generates VM property load/store helpers for `fields` classes.
+//! `#[boyia_fields]` mirrors struct fields into Boyia `mParams`; `#[boyia_native_object]` uses `nativePtr` + `Box`.
 
 use proc_macro::TokenStream;
 use proc_macro2::Span;
@@ -15,6 +15,7 @@ struct ClassConfig {
     name: LitStr,
     registrar: syn::Ident,
     fields: bool,
+    native: bool,
 }
 
 impl Parse for ClassConfig {
@@ -22,11 +23,19 @@ impl Parse for ClassConfig {
         let mut name = None;
         let mut registrar = None;
         let mut fields = false;
+        let mut native = false;
 
         while !input.is_empty() {
             let key: syn::Ident = input.parse()?;
             if key == "fields" {
                 fields = true;
+                if input.peek(Comma) {
+                    input.parse::<Comma>()?;
+                }
+                continue;
+            }
+            if key == "native" {
+                native = true;
                 if input.peek(Comma) {
                     input.parse::<Comma>()?;
                 }
@@ -40,7 +49,7 @@ impl Parse for ClassConfig {
                     return Err(syn::Error::new(
                         key.span(),
                         format!(
-                            "unknown key `{other}`, expected `name`, `registrar`, or `fields`"
+                            "unknown key `{other}`, expected `name`, `registrar`, `fields`, or `native`"
                         ),
                     ));
                 }
@@ -58,6 +67,7 @@ impl Parse for ClassConfig {
                 syn::Error::new(Span::call_site(), "missing `registrar = ...` in attribute")
             })?,
             fields,
+            native,
         })
     }
 }
@@ -694,12 +704,13 @@ fn expand_sync_method(
     func: &ItemFn,
     struct_ty: &Type,
     has_fields: bool,
+    has_native: bool,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let (self_arg, args) = collect_args(func)?;
-    if self_arg != SelfArg::None && !has_fields {
+    if self_arg != SelfArg::None && !has_fields && !has_native {
         return Err(syn::Error::new_spanned(
             func,
-            "`self` requires `#[boyia_class(..., fields)]` and `#[boyia_fields]` on the struct",
+            "`self` requires `#[boyia_class(..., native)]` + `#[boyia_native_object]` or `#[boyia_class(..., fields)]` + `#[boyia_fields]`",
         ));
     }
     let mut func = func.clone();
@@ -718,17 +729,51 @@ fn expand_sync_method(
         .iter()
         .filter(|a| a.optional_default.is_none())
         .count();
-    let min_locals = (required_args + 1) as i32;
+    let min_locals = if self_arg != SelfArg::None {
+        (required_args + 2) as i32
+    } else {
+        (required_args + 1) as i32
+    };
     let arg_names: Vec<_> = args.iter().map(|a| &a.name).collect();
     let arg_extractions: Vec<_> = args.iter().map(sync_arg_extraction).collect::<Result<_, _>>()?;
 
-    let work_call = match self_arg {
-        SelfArg::None => quote! { #struct_ty::#work_name( #( #arg_names, )* ) },
-        SelfArg::Ref => quote! { #struct_ty::#work_name(&state, #( #arg_names, )*) },
-        SelfArg::Mut => quote! { #struct_ty::#work_name(&mut state, #( #arg_names, )*) },
+    let work_call = if has_native && self_arg != SelfArg::None {
+        match self_arg {
+            SelfArg::Ref | SelfArg::Mut => {
+                quote! { #struct_ty::#work_name(state, #( #arg_names, )*) }
+            }
+            SelfArg::None => unreachable!(),
+        }
+    } else {
+        match self_arg {
+            SelfArg::None => quote! { #struct_ty::#work_name( #( #arg_names, )* ) },
+            SelfArg::Ref => quote! { #struct_ty::#work_name(&state, #( #arg_names, )*) },
+            SelfArg::Mut => quote! { #struct_ty::#work_name(&mut state, #( #arg_names, )*) },
+        }
     };
 
-    let (state_prelude, state_epilogue) = if has_fields && self_arg != SelfArg::None {
+    let (state_prelude, state_epilogue) = if has_native && self_arg != SelfArg::None {
+        let access = match self_arg {
+            SelfArg::Ref => quote! {
+                boyia_gc::boyia_native_ref::<#struct_ty>(class_body, &mut *rt)
+            },
+            SelfArg::Mut => quote! {
+                boyia_gc::boyia_native_mut::<#struct_ty>(class_body, &mut *rt)
+            },
+            SelfArg::None => unreachable!(),
+        };
+        (
+            quote! {
+                let class_body = crate::some_or_end!(site.this_function());
+                let rt = unsafe { boyia_vm::get_runtime_from_vm(site.vm()) };
+                if rt.is_null() {
+                    return boyia_vm::OpHandleResult::kOpResultEnd;
+                }
+                let state = unsafe { #access };
+            },
+            quote! {},
+        )
+    } else if has_fields && self_arg != SelfArg::None {
         let store = if self_arg == SelfArg::Mut {
             quote! {
                 unsafe { state.boyia_store_to(class_body, site.vm()); }
@@ -801,11 +846,16 @@ fn expand_class(class_config: &ClassConfig, imp: &ItemImpl) -> syn::Result<proc_
         ));
     }
 
+    if class_config.fields && class_config.native {
+        return Err(syn::Error::new_spanned(
+            imp,
+            "`#[boyia_class]` cannot use both `fields` and `native`; use `#[boyia_fields]` or `#[boyia_native_object]`",
+        ));
+    }
+
     let struct_ty = imp.self_ty.clone();
     let has_fields = class_config.fields;
-    if has_fields {
-        // `boyia_attach_class_props` is generated by `#[boyia_fields]` on the struct.
-    }
+    let has_native = class_config.native;
 
     let mut method_expansions = Vec::new();
     let mut impl_methods = Vec::new();
@@ -835,7 +885,9 @@ fn expand_class(class_config: &ClassConfig, imp: &ItemImpl) -> syn::Result<proc_
                 (&cfg.method, &cfg.native)
             }
             BuiltinKind::Sync(cfg) => {
-                method_expansions.push(expand_sync_method(cfg, &func, &struct_ty, has_fields)?);
+                method_expansions.push(expand_sync_method(
+                    cfg, &func, &struct_ty, has_fields, has_native,
+                )?);
                 (&cfg.method, &cfg.native)
             }
         };
@@ -855,7 +907,11 @@ fn expand_class(class_config: &ClassConfig, imp: &ItemImpl) -> syn::Result<proc_
     let class_name = &class_config.name;
     let registrar = &class_config.registrar;
 
-    let attach_props = if has_fields {
+    let attach_props = if has_native {
+        quote! {
+            unsafe { boyia_gc::attach_native_ptr_slot(class_body, gen_id); }
+        }
+    } else if has_fields {
         quote! {
             unsafe { #struct_ty::boyia_attach_class_props(class_body, vm, gen_id); }
         }
@@ -1149,6 +1205,144 @@ fn expand_boyia_fields(item: &ItemStruct) -> syn::Result<proc_macro2::TokenStrea
             }
         }
     })
+}
+
+// ---------------------------------------------------------------------------
+// `#[boyia_native_object]` — struct fields in `Box<T>` with vtable GC (`nativePtr`)
+// ---------------------------------------------------------------------------
+
+fn field_default_init(field: &Field) -> syn::Result<proc_macro2::TokenStream> {
+    let name = field.ident.as_ref().ok_or_else(|| {
+        syn::Error::new_spanned(field, "tuple struct fields are not supported by `#[boyia_native_object]`")
+    })?;
+    let default_lit = parse_field_default(&field.attrs);
+    let ty = &field.ty;
+    let type_name = type_last_ident(ty).unwrap_or_default();
+
+    let init = match type_name.as_str() {
+        "bool" => {
+            let v = default_lit.as_deref() == Some("true");
+            quote! { #v }
+        }
+        "String" => {
+            let v = default_lit.unwrap_or_default();
+            quote! { #v.to_string() }
+        }
+        "f32" | "f64" => {
+            let v: f64 = default_lit.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+            quote! { #v as #ty }
+        }
+        "u64" | "usize" => {
+            let v: u64 = default_lit.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0);
+            quote! { #v as #ty }
+        }
+        "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" => {
+            let v: i64 = default_lit.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0);
+            quote! { #v as #ty }
+        }
+        other => {
+            return Err(syn::Error::new_spanned(
+                ty,
+                format!(
+                    "unsupported field type `{other}` in `#[boyia_native_object]`; \
+                     use bool, integer types, float types, or String"
+                ),
+            ));
+        }
+    };
+
+    Ok(quote! { #name: #init, })
+}
+
+fn expand_boyia_native_object(item: &ItemStruct) -> syn::Result<proc_macro2::TokenStream> {
+    let struct_name = &item.ident;
+    let generics = &item.generics;
+
+    let fields = match &item.fields {
+        Fields::Named(named) => &named.named,
+        _ => {
+            return Err(syn::Error::new_spanned(
+                item,
+                "`#[boyia_native_object]` requires a struct with named fields",
+            ));
+        }
+    };
+
+    if fields.is_empty() {
+        return Err(syn::Error::new_spanned(
+            item,
+            "`#[boyia_native_object]` requires at least one field",
+        ));
+    }
+
+    let mut struct_item = item.clone();
+    struct_item.attrs.retain(|a| {
+        !a.path().is_ident("boyia_native_object") && !a.path().is_ident("boyia_field_default")
+    });
+    struct_item.attrs.push(syn::parse_quote! { #[repr(C)] });
+
+    for field in struct_item.fields.iter_mut() {
+        field.attrs.retain(|a| !a.path().is_ident("boyia_field_default"));
+    }
+
+    let hdr_field: Field = syn::parse_quote! {
+        __boyia_hdr: boyia_gc::NativePropHeader
+    };
+    if let Fields::Named(ref mut named) = struct_item.fields {
+        named.named.insert(0, hdr_field);
+    }
+
+    let mut default_fields = Vec::new();
+    for field in fields {
+        default_fields.push(field_default_init(field)?);
+    }
+
+    Ok(quote! {
+        #struct_item
+
+        impl #struct_name #generics {
+            fn boyia_new_header() -> boyia_gc::NativePropHeader {
+                boyia_gc::NativePropHeader::new(&<Self as boyia_gc::NativePropTrait>::VTABLE)
+            }
+        }
+
+        impl boyia_gc::NativePropTrait for #struct_name #generics {
+            const VTABLE: boyia_gc::NativePropVTable = boyia_gc::NativePropVTable {
+                mark_fn: Self::native_mark,
+                flag_fn: Self::native_flag,
+                drop_fn: Self::native_drop,
+            };
+
+            fn boyia_default() -> Self {
+                Self {
+                    __boyia_hdr: Self::boyia_new_header(),
+                    #( #default_fields )*
+                }
+            }
+
+            unsafe fn native_drop(ptr: *mut boyia_vm::LVoid) {
+                let _ = Box::from_raw(ptr as *mut Self);
+            }
+        }
+    })
+}
+
+/// ```ignore
+/// #[boyia_native_object]
+/// struct ConfigBuiltins {
+///     #[boyia_field_default = "false"]
+///     debug: bool,
+///     timeout_ms: u64,
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn boyia_native_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let item = parse_macro_input!(item as ItemStruct);
+
+    match expand_boyia_native_object(&item) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
 }
 
 /// ```ignore

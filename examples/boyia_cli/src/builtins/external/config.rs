@@ -1,10 +1,10 @@
-//! Config builtin: class fields (`debug`, `timeoutMs`) mapped to Boyia class properties via `#[boyia_fields]`.
+//! Config builtin: native heap state (`nativePtr` + `Box`) with vtable GC.
 
 #![allow(dead_code)]
 
-use builtin_macro::{boyia_class, boyia_fields};
+use builtin_macro::{boyia_class, boyia_native_object};
 
-#[boyia_fields]
+#[boyia_native_object]
 pub struct ConfigBuiltins {
     #[boyia_field_default = "false"]
     debug: bool,
@@ -12,7 +12,7 @@ pub struct ConfigBuiltins {
     timeout_ms: u64,
 }
 
-#[boyia_class(name = "Config", registrar = builtin_config_class, fields)]
+#[boyia_class(name = "Config", registrar = builtin_config_class, native)]
 impl ConfigBuiltins {
     #[boyia_sync_builtin(native = config_get_debug_native, method = "getDebug")]
     fn get_debug(&self) -> bool {
@@ -26,8 +26,7 @@ impl ConfigBuiltins {
 
     #[boyia_sync_builtin(native = config_get_timeout_native, method = "getTimeout")]
     fn get_timeout(&self) -> u64 {
-        let timeout = self.timeout_ms * 2;
-        timeout
+        self.timeout_ms * 2
     }
 
     #[boyia_sync_builtin(native = config_set_timeout_native, method = "setTimeout")]
