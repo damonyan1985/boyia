@@ -11,7 +11,6 @@ pub(crate) mod builtin_json;
 #[path = "macro/builtin_vec.rs"]
 pub(crate) mod builtin_vec;
 
-pub(crate) mod class_props;
 pub(crate) mod r#async;
 pub(crate) mod sync;
 mod run_loop;

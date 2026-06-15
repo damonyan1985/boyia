@@ -499,20 +499,12 @@ impl TensorBuiltins {
         #[optional(default = "float32")]
         dtype: String,
     ) -> Handle {
-        eprintln!(
-            "[tensor_tensor] enter: data_len={}, dtype={:?}",
-            data.len(),
-            dtype
-        );
         let Some(dtype) = TensorDtype::parse(&dtype) else {
-            eprintln!("[tensor_tensor] invalid dtype");
             return TENSOR_HANDLE_INVALID;
         };
-        let id = BoyiaTensor::from_nested(&data, dtype)
+        BoyiaTensor::from_nested(&data, dtype)
             .map(store_tensor)
-            .unwrap_or(TENSOR_HANDLE_INVALID);
-        eprintln!("[tensor_tensor] return id={id}");
-        id
+            .unwrap_or(TENSOR_HANDLE_INVALID)
     }
 
     #[boyia_sync_builtin(native = tensor_arange_native, method = "arange")]
