@@ -901,7 +901,7 @@ fn field_const_name(field: &syn::Ident) -> syn::Ident {
 
 fn parse_field_default(attrs: &[Attribute]) -> Option<String> {
     for attr in attrs {
-        let is_default = attr.path().is_ident("default") || attr.path().is_ident("boyia_default");
+        let is_default = attr.path().is_ident("boyia_field_default");
         if !is_default {
             continue;
         }
@@ -1095,10 +1095,10 @@ fn expand_boyia_fields(item: &ItemStruct) -> syn::Result<proc_macro2::TokenStrea
 
     let mut struct_item = item.clone();
     struct_item.attrs.retain(|a| {
-        !a.path().is_ident("boyia_fields") && !a.path().is_ident("boyia_default")
+        !a.path().is_ident("boyia_fields") && !a.path().is_ident("boyia_field_default")
     });
     for field in struct_item.fields.iter_mut() {
-        field.attrs.retain(|a| !a.path().is_ident("boyia_default"));
+        field.attrs.retain(|a| !a.path().is_ident("boyia_field_default"));
     }
 
     let mut const_decls = Vec::new();
@@ -1177,7 +1177,7 @@ pub fn boyia_class(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// ```ignore
 /// #[boyia_fields]
 /// struct ConfigBuiltins {
-///     #[default = "false"]
+///     #[boyia_field_default = "false"]
 ///     debug: bool,
 ///     timeout_ms: u64,
 /// }

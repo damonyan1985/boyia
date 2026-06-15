@@ -1,409 +1,414 @@
-# Builtin Struct 字段与 Boyia Class 属性映射：技术可行性分析
+# Builtin 字段与 Boyia 对象映射
 
-本文面向 Rust 扩展开发者，分析在 `examples/boyia_cli/src/builtins` 中声明带字段的 struct，并通过过程宏将字段映射为 Boyia class 属性、在 `#[boyia_sync_builtin]` / `#[boyia_async_builtin]` 中读写并写回的技术可行性。
+本文以 `examples/boyia_cli/src/builtins/external/config.rs` 中的 **Config** 内置类为例，说明 Rust struct 字段如何映射为 Boyia 对象属性，以及 `#[boyia_fields]` / `#[boyia_class]` 的完整使用与宏展开流程。
 
-相关实现与用法见 [Boyia 语言开发文档](./boyia_language_development.md) 第 6 节。
-
-## 1. 背景与目标
-
-### 1.1 当前写法
-
-CLI builtin 的典型结构是**空 marker struct + 纯关联函数**，例如 `json.rs`：
-
-```rust
-struct JsonBuiltins;
-
-#[boyia_class(name = "Json", registrar = builtin_json_class)]
-impl JsonBuiltins {
-    #[boyia_sync_builtin(native = json_parse_native, method = "parse")]
-    fn json_parse(text: String) -> Option<JsonValue> {
-        serde_json::from_str(&text).ok()
-    }
-}
-```
-
-### 1.2 期望能力
-
-希望支持类似下面的语义：
-
-```rust
-struct ConfigBuiltins {
-    debug: bool,
-    timeout_ms: u64,
-}
-
-#[boyia_class(name = "Config", registrar = builtin_config_class)]
-impl ConfigBuiltins {
-    #[boyia_sync_builtin(native = config_set_timeout_native, method = "setTimeout")]
-    fn set_timeout(&mut self, ms: u64) {
-        self.timeout_ms = ms; // 修改写回 Boyia class 属性
-    }
-
-    #[boyia_async_builtin(native = config_load_native, method = "load")]
-    fn load(&mut self, url: String) -> AsyncBuiltinResult {
-        // 可读写字段，最终同步到 class 属性
-        ...
-    }
-}
-```
-
-目标可拆解为三件事：
-
-1. **注册期**：struct 字段 → `class_body.mParams` 初始槽位（脚本可读 `Config.debug`）
-2. **调用期**：handler 从 VM 加载 → 填充 Rust struct → 调用用户函数
-3. **返回期**：struct 修改 → 写回 `mParams`（脚本侧可见）
+相关总览见 [Boyia 语言开发文档](./boyia_language_development.md) 第 6 节。
 
 ---
 
-## 2. 现状：宏与 VM 各自做什么
-
-### 2.1 `#[boyia_class]` 宏约束
-
-宏实现位于 `examples/boyia_cli/src/runner/macro/builtin_macro.rs`，当前约束如下：
-
-| 约束 | 含义 |
-|------|------|
-| `impl` 内只能是 builtin 函数 | 不支持字段、不支持普通方法 |
-| 禁止 `self` | `collect_args` 遇到 `self` 直接报错 |
-| 只生成 `attach_method` | registrar 里**不注册任何 class 属性** |
-| 全局静态类 | `register_async_builtin_class` 创建 `File` / `Json` 等单例全局类 |
-
-### 2.2 VM 层：class 属性存储
-
-Boyia VM 中 class 属性存放在 `BoyiaFunction.mParams` 槽位中。核心 builtins 已有先例：
-
-- **`String`**（`crates/boyia_builtins/src/string.rs`）：注册 `buffer`、`hash` 属性
-- **`MicroTask`**（`crates/boyia_builtins/src/microtask.rs`）：注册 `task` 属性，并在 native 方法中读写 `mParams` 槽位
-
-辅助函数：
-
-- `gen_builtin_class_function`：添加 `BY_NAV_FUNC` 方法
-- `gen_builtin_class_prop_function`：添加 `BY_NAV_PROP` 属性方法
-
-**结论：VM 层完全支持 class 属性；缺的是宏层把 Rust struct 字段与这些槽位桥接起来。**
-
-### 2.3 调用时能否拿到 class 对象（`this`）
-
-`BY_NAV_FUNC` 静态方法调用时，VM 在进 native 前会 `local_push(this)`（`crates/boyia_vm/src/execute.rs`）：
+## 1. 源码：你写什么
 
 ```rust
-if value_type == ValueType::BY_NAV_FUNC || value_type == ValueType::BY_NAV_PROP {
-    local_push(&mut (*e_state).mStackFrame.mClass, &mut *vm);
-    return nav_fun(&mut *vm);
-}
-```
+// examples/boyia_cli/src/builtins/external/config.rs
 
-因此 handler 可通过 `get_local_value(size - 1)` 拿到 `this`，再经 `(*obj).mValue.mObj.mPtr → BoyiaFunction → mParams` 读写属性。
+use builtin_macro::{boyia_class, boyia_fields};
 
-现有 `SyncCallSite` / `CallSite` **尚未暴露** `this`，但基础设施足够，扩展 `this_obj()` / `this_function()` 即可。
-
----
-
-## 3. 技术可行性结论
-
-| 问题 | 结论 |
-|------|------|
-| struct 字段能否存为 Boyia class 属性？ | **能**，VM 已有 `mParams` 机制 |
-| sync / async builtin 能否使用并写回？ | **sync 完全可行**；**async 需快照 + VM 线程写回** |
-| 能否用过程宏实现？ | **能**，在现有 `builtin_macro.rs` 上扩展 |
-| 改字段是否等于改属性？ | **sync 可以**（`&mut self` + load/store）；**async 为最终一致性** |
-
-**整体判断：技术可行性高，与现有架构一致。建议以「VM mParams 为权威 + 调用期 Rust 镜像 + 宏生成 load/store」为主线。**
-
----
-
-## 4. 实现方案
-
-### 4.1 宏扩展：编译期 schema → 属性注册
-
-`syn` 在 `#[boyia_class]` 展开时解析 struct 的 `Fields::Named`，为每个字段生成 registrar 代码：
-
-```rust
-// 宏展开示意
-pub fn builtin_config_class(vm: &mut BoyiaVM, gen_id: &mut dyn FnMut(&str) -> LUintPtr) {
-    register_async_builtin_class(vm, gen_id, "Config", |class_body, vm, gen_id| {
-        attach_class_prop(class_body, gen_id("debug"), ValueType::BY_INT, 0);
-        attach_class_prop(class_body, gen_id("timeout_ms"), ValueType::BY_INT, 0);
-        attach_method(gen_id, "setTimeout", ..., class_body, vm);
-    });
-}
-```
-
-需新增 `attach_class_prop` helper（逻辑类似 `string.rs` 手写注册，可放到 `runner/async.rs`）。
-
-**Phase 1 支持的字段类型**（与现有 sync 类型对齐）：
-
-| Rust 字段类型 | VM ValueType | 双向转换 |
-|---------------|--------------|----------|
-| `bool` | `BY_INT` | ✅ |
-| 整数（`i32` / `i64` / `u64` 等） | `BY_INT` | ✅ |
-| `f32` / `f64` | `BY_REAL` | ✅ |
-| `String` | `BY_STRING` / string object | ✅（需注意内存所有权） |
-| `serde_json::Value` | `BY_CLASS` Map | ⚠️ 需复用 `builtin_json.rs` |
-
-`Option<T>`、`Vec<T>`、嵌套 struct、自定义 enum 需额外序列化层，建议二期再做。
-
-### 4.2 方法体内使用字段：三种路径
-
-#### 方案 A：`&mut self` + 宏改写 handler（推荐）
-
-宏保留用户函数，并生成 handler：
-
-```rust
-fn set_timeout_handler(site: &mut SyncCallSite<'_>) -> OpHandleResult {
-    let this = site.this_function()?;
-    let mut state = ConfigBuiltins::load_from(this)?;
-    let ms = site.arg_i64(1)? as u64;
-    set_timeout(&mut state, ms);
-    state.store_to(this)?;
-    set_sync_return((), site.vm())
-}
-```
-
-- 用户体验最好
-- 宏需维护「字段名 → mParams 索引」映射
-- **属性必须先于方法注册**，槽位顺序固定
-
-#### 方案 B：无 `self`，宏注入隐式 state 参数
-
-```rust
-fn set_timeout(state: &mut ConfigBuiltins, ms: u64) { ... }
-```
-
-实现更简单，但 API 不自然，不推荐作为主路径。
-
-#### 方案 C：Rust struct 仅作 schema，运行时不实例化
-
-宏生成局部变量与 `load_prop` / `store_prop` 调用，本质仍是方案 A。
-
-### 4.3 同步 vs 异步写回
-
-```
-Sync Builtin（VM 线程）:
-  load mParams → struct → 调用 work → store struct → mParams → 写 reg0
-
-Async Builtin（跨线程）:
-  VM 线程 load → 快照 → 线程池 work → VM 线程 before/回调 store → callback Map
-```
-
-| 场景 | 写回可行性 | 说明 |
-|------|-----------|------|
-| `boyia_sync_builtin` | ✅ 完全可行 | 全程 VM 线程，handler 末尾 `store_to` |
-| `boyia_async_builtin` | ⚠️ 有条件可行 | work 在线程池，**不能直接碰 VM** |
-| 脚本 `Config.debug = true` | ✅ 若属性在 class 上 | Rust 下次 `load` 能读到 |
-
-**异步写回做法：**
-
-1. **利用已有 `before` 钩子**（`boyia_async_builtin(before = ...)`）：work 前 clone 快照，work 后在 VM 线程 `store_to`
-2. **扩展 `AsyncBuiltinResult`**：如 `OkWithState { data, state }`，侵入性更大
-
-异步只读字段（如把 `timeout_ms` 传给 HTTP client）无需写回，快照只读即可。
-
----
-
-## 5. 关键难点与边界
-
-### 5.1 单一数据源（Single Source of Truth）
-
-| 策略 | 优点 | 缺点 |
-|------|------|------|
-| **VM mParams 为权威**（推荐） | 脚本 `Config.timeout` 与 Rust 一致 | 每次调用 load/store 有开销 |
-| **Rust `static Mutex<Struct>` 为权威** | 类似 `TensorRegistry`，异步友好 | **不是** Boyia class 属性，脚本不可见 |
-| **双写** | — | 竞态、不一致，应避免 |
-
-大对象或跨线程共享状态仍建议 **Handle + Registry**（见 `tensor.rs`）；**小标量配置类字段**适合 class 属性映射。
-
-### 5.2 全局单例类 vs 实例类
-
-当前 `File` / `Json` 是**全局单例 class**，属性挂在 class 对象上，全进程共享一份状态。
-
-若需要 per-instance 状态（`new Config()`），需：
-
-- 注册 class 模板 + `copy_object` 创建实例（类似 `MicroTask`）
-- `this` 指向实例的 `mParams`，而非 class 模板
-
-宏 API 可区分 `singleton`（默认）与 `instance` 模式。
-
-### 5.3 属性槽位顺序
-
-`MicroTask` 使用 `mParams.add(1)` 硬编码索引，说明**属性必须先于方法注册，且顺序固定**。宏生成顺序：
-
-1. 所有 `attach_class_prop`
-2. 所有 `attach_method`
-
-load/store 使用编译期常量索引，避免运行时按名查找。
-
-### 5.4 `String` 属性内存
-
-`BY_STRING` 的 buffer 由 VM 管理；写回时需复用 `sync.rs` / `async.rs` 中已有 string 转换（如 `create_native_string`），避免悬空指针。
-
-### 5.5 过程宏的输入形态
-
-Rust 不允许一个 attribute 同时挂在 struct 和 impl 上。常见做法：
-
-```rust
-// 做法 1：字段宏在 struct，class 宏在 impl（已实现，见 `builtins/external/config.rs`）
 #[boyia_fields]
-struct ConfigBuiltins {
-    #[boyia_default = "false"]
+pub struct ConfigBuiltins {
+    #[boyia_field_default = "false"]
     debug: bool,
-    #[boyia_default = "30000"]
+    #[boyia_field_default = "30000"]
     timeout_ms: u64,
 }
 
 #[boyia_class(name = "Config", registrar = builtin_config_class, fields)]
-impl ConfigBuiltins { ... }
+impl ConfigBuiltins {
+    #[boyia_sync_builtin(native = config_get_debug_native, method = "getDebug")]
+    fn get_debug(&self) -> bool {
+        self.debug
+    }
 
-// 做法 2：声明式宏合并 struct + impl
-boyia_class! {
-    name = "Config",
-    registrar = builtin_config_class,
-    struct ConfigBuiltins { debug: bool, timeout_ms: u64 }
-    impl { ... }
+    #[boyia_sync_builtin(native = config_set_debug_native, method = "setDebug")]
+    fn set_debug(&mut self, value: bool) {
+        self.debug = value;
+    }
+
+    #[boyia_sync_builtin(native = config_get_timeout_native, method = "getTimeout")]
+    fn get_timeout(&self) -> u64 {
+        self.timeout_ms * 2
+    }
+
+    #[boyia_sync_builtin(native = config_set_timeout_native, method = "setTimeout")]
+    fn set_timeout(&mut self, ms: u64) {
+        self.timeout_ms = ms;
+    }
 }
 ```
 
-### 5.6 与 Tensor 模式对比
+三个宏分工：
 
-`Tensor` 使用 **Handle + 全局 `TensorRegistry`**，因为状态大、生命周期复杂、不适合放进 `mParams`：
+| 宏 | 挂在哪 | 作用 |
+|----|--------|------|
+| `#[boyia_fields]` | `struct ConfigBuiltins` | 把字段注册为 Boyia 属性，并生成 `boyia_load_from` / `boyia_store_to` |
+| `#[boyia_field_default = "..."]` | 字段上 | 注册时的默认值 |
+| `#[boyia_class(name = "Config", registrar = ..., fields)]` | `impl` 上 | 注册 Boyia 类与方法；`fields` 开启字段 load/store |
+| `#[boyia_sync_builtin(...)]` | 方法上 | 把 Rust 方法映射为脚本可调用的同步 native 方法 |
 
-```rust
-struct TensorRegistry {
-    slots: Vec<Option<BoyiaTensor>>,
-    free_list: Vec<usize>,
-}
-```
+### 1.1 `#[boyia_field_default]` 支持的字段类型
 
-| 场景 | 推荐模式 |
-|------|----------|
-| 小标量配置（timeout、debug 开关） | class 属性 + struct 镜像 |
-| 大张量、句柄资源 | Handle + Registry |
+属性写法统一为 **字符串字面量**：`#[boyia_field_default = "..."]`。宏按字段的 Rust 类型解析引号内的文本。
 
----
+| Rust 字段类型 | `boyia_field_default` 示例 | 省略时的默认值 | 说明 |
+|---------------|------------------------------|----------------|------|
+| `bool` | `#[boyia_field_default = "true"]` | `false` | 仅 `"true"` 为 true，其余为 false |
+| `String` | `#[boyia_field_default = "production"]` | `""`（空字符串） | 引号内为 Boyia 属性初始文本 |
+| `f32` / `f64` | `#[boyia_field_default = "1.5"]` | `0.0` | 按浮点解析 |
+| `u64` / `usize` | `#[boyia_field_default = "30000"]` | `0` | 按无符号整数解析 |
+| `i8` / `i16` / `i32` / `i64` / `isize` | `#[boyia_field_default = "-1"]` | `0` | 按有符号整数解析 |
+| `u8` / `u16` / `u32` | `#[boyia_field_default = "255"]` | `0` | 存入 VM `BY_INT` 槽位 |
 
-## 6. 推荐实现路线
-
-### Phase 1 — 最小可用（仅 sync）
-
-1. 新增 `attach_class_prop` + 按类型的 `prop_load` / `prop_store`
-2. `SyncCallSite::this_function() -> *mut BoyiaFunction`
-3. 扩展 `#[boyia_class]`：解析 struct 字段（或 `#[boyia_fields]`）
-4. 支持 `&mut self` / `&self` 的 sync 方法；handler 自动 load/store
-5. 字段类型：`bool`、整数、`String`
-
-### Phase 2 — 异步与脚本互操作
-
-1. async handler：调用前 load 快照，`before` 写回
-2. 文档说明：async 内字段修改在 work 返回后才对脚本可见
-3. 验证脚本 `Config.debug = true` 与 Rust `load` 一致
-
-### Phase 3 — 实例类与复杂类型
-
-1. `instance = true` 模式 + factory 方法
-2. `serde_json::Value` 属性
-3. 可选：`#[boyia_prop(readonly)]`、变更通知
-
----
-
-## 7. 宏展开示例（端到端）
-
-### 7.1 用户编写
+示例（含 `String` 字段）：
 
 ```rust
 #[boyia_fields]
-struct HttpBuiltins {
-    default_timeout: u64,
-}
-
-#[boyia_class(name = "Https", registrar = builtin_https_class)]
-impl HttpBuiltins {
-    #[boyia_sync_builtin(native = https_get_timeout_native, method = "getTimeout")]
-    fn get_timeout(&self) -> u64 {
-        self.default_timeout
-    }
-
-    #[boyia_sync_builtin(native = https_set_timeout_native, method = "setTimeout")]
-    fn set_timeout(&mut self, ms: u64) {
-        self.default_timeout = ms;
-    }
+pub struct AppBuiltins {
+    #[boyia_field_default = "development"]
+    env: String,
+    #[boyia_field_default = "30000"]
+    timeout_ms: u64,
 }
 ```
 
-### 7.2 宏生成（概念）
+未列出的类型（如 `Option<T>`、`Vec<T>`、自定义 struct）暂不支持，编译期会报错。
+
+---
+
+## 2. 注册流程：从编译到 VM 里有 `Config` 类
+
+```
+cargo build
+    │
+    ▼
+过程宏展开 config.rs（见第 5、6 节）
+    │
+    ▼
+生成 builtin_config_class 函数
+    │
+    ▼
+builtins/mod.rs 把它放进 DEFAULT_BUILTINS
+    │
+    ▼
+BoyiaRunner::create(registrars) 在 Boyia 任务线程依次调用 registrar
+    │
+    ▼
+register_async_builtin_class(vm, gen_id, "Config", |class_body, ...| {
+    ConfigBuiltins::boyia_attach_class_props(...)   // 先挂字段属性
+    attach_method(..., "getDebug",  ...)
+    attach_method(..., "setDebug",  ...)
+    attach_method(..., "getTimeout", ...)
+    attach_method(..., "setTimeout", ...)
+})
+```
+
+注册完成后，VM 里存在全局类 **Config**：
+
+- **属性**（来自 struct 字段）：`debug`、`timeout_ms`（存在 `mParams` 槽位 0、1）
+- **方法**（来自 `#[boyia_sync_builtin]`）：`getDebug`、`setDebug`、`getTimeout`、`setTimeout`
+
+注册表入口：
 
 ```rust
-impl HttpBuiltins {
-    const PROP_DEFAULT_TIMEOUT: usize = 0;
+// examples/boyia_cli/src/builtins/mod.rs
+pub const DEFAULT_BUILTINS: &[BuiltinRegistrar] = &[
+    external::config::builtin_config_class,
+    // ...
+];
+```
 
-    unsafe fn load_from(this: *mut BoyiaFunction) -> Self {
+---
+
+## 3. 脚本使用流程
+
+`examples/boyia_cli/script/main.boyia` 中的用法：
+
+```boyia
+var config = new(Config);
+config.setTimeout(5333);
+Util.log("config.getTimeout() : " + config.getTimeout());
+```
+
+```
+new(Config)
+  → VM 从 Config 类模板 copy 出实例
+  → 实例 mParams 带上 debug=false、timeout_ms=30000（默认值）
+
+config.setTimeout(5333)
+  → 调用 native config_set_timeout_native
+  → Rust handler：load → set_timeout → store
+
+config.getTimeout()
+  → 调用 native config_get_timeout_native
+  → Rust handler：load → get_timeout（返回 timeout_ms * 2）→ 不 store
+  → 日志打印 10666（5333 * 2）
+```
+
+说明：
+
+- **方法**（`setTimeout` / `getTimeout`）是脚本主要入口。
+- **字段**（`debug`、`timeout_ms`）挂在对象 `mParams` 上；Rust 方法通过 `self.debug` / `self.timeout_ms` 读写。脚本也可按属性名访问（如 `config.timeout_ms`），但命名是 Rust 字段名（蛇形），与方法名（驼峰）不同。
+
+---
+
+## 4. 单次方法调用的运行时流程
+
+以 `config.setTimeout(5333)` 为例：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Boyia 脚本：config.setTimeout(5333)                          │
+└────────────────────────────┬────────────────────────────────┘
+                             ▼
+┌─────────────────────────────────────────────────────────────┐
+│ VM：BY_NAV_FUNC 调用前 local_push(this)                      │
+│   this = config 实例对应的 BoyiaFunction                     │
+└────────────────────────────┬────────────────────────────────┘
+                             ▼
+┌─────────────────────────────────────────────────────────────┐
+│ config_set_timeout_native(vm)                                │
+│   → set_timeout_handler(&mut SyncCallSite)                   │
+└────────────────────────────┬────────────────────────────────┘
+                             ▼
+  ① class_body = site.this_function()     // 拿到 this 的 mParams 容器
+  ② state = ConfigBuiltins::boyia_load_from(class_body)
+       // 新建临时 struct：{ debug: ..., timeout_ms: 5333 之前的值 }
+  ③ ms = site.arg_i64(1) as u64           // 从 VM 读脚本参数 5333
+  ④ ConfigBuiltins::set_timeout(&mut state, ms)
+       // 执行你写的：self.timeout_ms = ms
+  ⑤ state.boyia_store_to(class_body, vm)  // 写回 mParams[1]
+  ⑥ set_sync_return((), vm)               // 返回给脚本
+                             ▼
+┌─────────────────────────────────────────────────────────────┐
+│ config 实例上 timeout_ms 属性 = 5333                         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+`get_timeout`（`&self`）流程相同，但**没有第 ⑤ 步**——只读，不写回 VM。
+
+---
+
+## 5. `#[boyia_fields]` 宏展开流程
+
+**输入**（你写的 struct）：
+
+```rust
+#[boyia_fields]
+pub struct ConfigBuiltins {
+    #[boyia_field_default = "false"]
+    debug: bool,
+    #[boyia_field_default = "30000"]
+    timeout_ms: u64,
+}
+```
+
+**宏在编译期做的事：**
+
+1. 解析每个字段的名字、类型、`#[boyia_field_default]`
+2. 按声明顺序分配固定槽位索引：`debug → 0`，`timeout_ms → 1`
+3. 生成 `impl ConfigBuiltins { ... }` 辅助方法
+
+**展开结果（概念代码，省略属性清理）：**
+
+```rust
+pub struct ConfigBuiltins {
+    debug: bool,
+    timeout_ms: u64,
+}
+
+impl ConfigBuiltins {
+    pub const BOYIA_FIELD_DEBUG: usize = 0;
+    pub const BOYIA_FIELD_TIMEOUT_MS: usize = 1;
+
+    /// 注册期：把字段挂到 class_body.mParams
+    pub unsafe fn boyia_attach_class_props(
+        class_body: *mut BoyiaFunction,
+        vm: &mut BoyiaVM,
+        gen_id: &mut dyn FnMut(&str) -> LUintPtr,
+    ) {
+        class_props::attach_class_prop_bool(class_body, gen_id("debug"), false);
+        class_props::attach_class_prop_i64(class_body, gen_id("timeout_ms"), 30000);
+    }
+
+    /// 调用期：VM 属性 → 临时 Rust struct（每次调用新建一个）
+    pub unsafe fn boyia_load_from(class_body: *mut BoyiaFunction) -> Self {
         Self {
-            default_timeout: prop_load_u64(this, Self::PROP_DEFAULT_TIMEOUT),
+            debug: class_props::prop_load_bool(class_body, Self::BOYIA_FIELD_DEBUG),
+            timeout_ms: class_props::prop_load_u64(class_body, Self::BOYIA_FIELD_TIMEOUT_MS),
         }
     }
 
-    unsafe fn store_to(&self, this: *mut BoyiaFunction) {
-        prop_store_u64(this, Self::PROP_DEFAULT_TIMEOUT, self.default_timeout);
+    /// 调用期：临时 Rust struct → VM 属性（仅 &mut self 方法结束后调用）
+    pub unsafe fn boyia_store_to(
+        &self,
+        class_body: *mut BoyiaFunction,
+        vm: &mut BoyiaVM,
+    ) {
+        class_props::prop_store_bool(class_body, Self::BOYIA_FIELD_DEBUG, self.debug);
+        class_props::prop_store_u64(class_body, Self::BOYIA_FIELD_TIMEOUT_MS, self.timeout_ms);
     }
 }
+```
 
-pub fn builtin_https_class(vm: &mut BoyiaVM, gen_id: &mut dyn FnMut(&str) -> LUintPtr) {
-    register_async_builtin_class(vm, gen_id, "Https", |class_body, vm, gen_id| {
-        attach_class_prop_int(class_body, gen_id("default_timeout"), 30);
-        attach_method(gen_id, "getTimeout", https_get_timeout_native, class_body, vm);
-        attach_method(gen_id, "setTimeout", https_set_timeout_native, class_body, vm);
+要点：
+
+- **持久状态在 VM 的 `mParams`**，不在 Rust 堆里长期保存 `ConfigBuiltins`。
+- **`boyia_load_from` 每次调用都会 `Self { ... }` 新建一个临时 struct**。
+- 宏**不会改写**你方法体里的 `self.timeout_ms`，那就是普通 Rust 字段访问。
+
+---
+
+## 6. `#[boyia_class(..., fields)]` 宏展开流程
+
+**输入**（你写的 impl）：
+
+```rust
+#[boyia_class(name = "Config", registrar = builtin_config_class, fields)]
+impl ConfigBuiltins {
+    #[boyia_sync_builtin(native = config_set_timeout_native, method = "setTimeout")]
+    fn set_timeout(&mut self, ms: u64) {
+        self.timeout_ms = ms;
+    }
+    // ... 其余方法同理
+}
+```
+
+**宏在编译期对每个 `#[boyia_sync_builtin]` 方法：**
+
+1. 识别 `&self` / `&mut self` / 无 self
+2. 保留方法体，重新输出到 `impl ConfigBuiltins { ... }`
+3. 生成 `{方法名}_handler` + `define_sync_native!`
+4. 生成 `builtin_config_class` 注册函数
+
+**以 `set_timeout` 为例，展开出：**
+
+```rust
+// A. 保留你的 impl
+impl ConfigBuiltins {
+    fn set_timeout(&mut self, ms: u64) {
+        self.timeout_ms = ms;
+    }
+    // get_debug, set_debug, get_timeout ...
+}
+
+// B. 生成的 handler（VM 实际入口）
+fn set_timeout_handler(site: &mut SyncCallSite<'_>) -> OpHandleResult {
+    let class_body = some_or_end!(site.this_function());
+    let mut state = unsafe { ConfigBuiltins::boyia_load_from(class_body) };
+
+    let ms = some_or_end!(site.arg_i64(1)) as u64;
+
+    let __sync_result = ConfigBuiltins::set_timeout(&mut state, ms);
+
+    unsafe { state.boyia_store_to(class_body, site.vm()); }
+
+    crate::runner::sync::set_sync_return(__sync_result, site.vm())
+}
+
+// C. 注册为 native 函数
+unsafe fn config_set_timeout_native(vm: &mut BoyiaVM) -> OpHandleResult {
+    sync_dispatch(vm, 2, set_timeout_handler)  // min_locals = 参数数 + 1
+}
+
+// D. 类注册器
+pub fn builtin_config_class(
+    vm: &mut BoyiaVM,
+    gen_id: &mut dyn FnMut(&str) -> LUintPtr,
+) {
+    register_async_builtin_class(vm, gen_id, "Config", |class_body, vm, gen_id| {
+        unsafe { ConfigBuiltins::boyia_attach_class_props(class_body, vm, gen_id); }
+        attach_method(gen_id, "getDebug",    config_get_debug_native,    class_body, vm);
+        attach_method(gen_id, "setDebug",    config_set_debug_native,    class_body, vm);
+        attach_method(gen_id, "getTimeout",  config_get_timeout_native,  class_body, vm);
+        attach_method(gen_id, "setTimeout",  config_set_timeout_native,  class_body, vm);
     });
 }
+```
 
-fn https_set_timeout_handler(site: &mut SyncCallSite<'_>) -> OpHandleResult {
-    let this = site.this_function()?;
-    let mut state = unsafe { HttpBuiltins::load_from(this) };
-    let ms = some_or_end!(site.arg_i64(1)) as u64;
-    https_set_timeout(&mut state, ms);
-    unsafe { state.store_to(this) };
-    set_sync_return((), site.vm())
+**`get_timeout`（`&self`）的 handler 差异：**
+
+```rust
+fn get_timeout_handler(site: &mut SyncCallSite<'_>) -> OpHandleResult {
+    let class_body = some_or_end!(site.this_function());
+    let mut state = unsafe { ConfigBuiltins::boyia_load_from(class_body) };
+
+    let __sync_result = ConfigBuiltins::get_timeout(&state);
+    // 无 boyia_store_to
+
+    set_sync_return(__sync_result, site.vm())
 }
+```
+
+`ConfigBuiltins::set_timeout(&mut state, ms)` 与 `state.set_timeout(ms)` 完全等价；宏选用关联函数写法，因为 handler 里已有名为 `state` 的局部变量。
+
+---
+
+## 7. 字段 vs 方法：分别映射到什么
+
+| Rust 侧 | Boyia 侧 | 脚本示例 |
+|---------|----------|----------|
+| 字段 `debug` | 属性 `debug`（`mParams[0]`） | `config.debug`（属性名，蛇形） |
+| 字段 `timeout_ms` | 属性 `timeout_ms`（`mParams[1]`） | `config.timeout_ms` |
+| 方法 `get_debug` | 方法 `getDebug` | `config.getDebug()` |
+| 方法 `set_debug` | 方法 `setDebug` | `config.setDebug(true)` |
+| 方法 `get_timeout` | 方法 `getTimeout` | `config.getTimeout()` → 返回 `timeout_ms * 2` |
+| 方法 `set_timeout` | 方法 `setTimeout` | `config.setTimeout(5333)` |
+
+注意 `get_timeout` 的返回值是**方法逻辑**（乘 2），不是字段原值。字段原值存在 `timeout_ms` 属性上。
+
+---
+
+## 8. 数据流总图
+
+```
+                    注册期（进程启动一次）
+┌──────────────────────────────────────────────────┐
+│ ConfigBuiltins::boyia_attach_class_props          │
+│   mParams[0] ← debug      (default false)          │
+│   mParams[1] ← timeout_ms (default 30000)        │
+│ attach_method × 4                                 │
+└──────────────────────────────────────────────────┘
+
+                    运行期（每次方法调用）
+┌──────────────┐    load     ┌─────────────────┐    store    ┌──────────────┐
+│ VM mParams   │ ──────────► │ ConfigBuiltins  │ ──────────► │ VM mParams   │
+│ (权威存储)   │             │ (临时栈上副本)   │  仅 &mut self │ (权威存储)   │
+└──────────────┘             └─────────────────┘             └──────────────┘
+                                      │
+                                      ▼
+                             你写的 impl 方法
+                             self.debug / self.timeout_ms
 ```
 
 ---
 
-## 8. 相关文件索引
+## 9. 当前限制（Config 适用）
 
-| 路径 | 职责 |
-|------|------|
-| `examples/boyia_cli/src/runner/macro/builtin_macro.rs` | `#[boyia_class]`、`#[boyia_sync_builtin]`、`#[boyia_async_builtin]` |
-| `examples/boyia_cli/src/runner/sync.rs` | 同步 native 基础设施 |
-| `examples/boyia_cli/src/runner/async.rs` | 异步 native、`register_async_builtin_class`、`attach_method` |
-| `crates/boyia_builtins/src/lib.rs` | `gen_builtin_class_function`、`gen_builtin_class_prop_function` |
-| `crates/boyia_builtins/src/string.rs` | class 属性注册示例（`buffer`、`hash`） |
-| `crates/boyia_builtins/src/microtask.rs` | 运行时读写 `mParams` 示例 |
-| `examples/boyia_cli/src/builtins/ai/tensor.rs` | Handle + Registry 模式（对比参考） |
-| `tools/docs/boyia_language_development.md` | Builtins 编写总览 |
+| 项 | 说明 |
+|----|------|
+| 带 `self` 的方法 | 仅 **sync**（`#[boyia_sync_builtin]`）；async 带 `self` 编译报错 |
+| 字段类型 | `bool`、整数、浮点、`String` |
+| 写回时机 | 仅 `&mut self` 的 sync 方法在返回前 `boyia_store_to` |
+| 临时 struct | 每次调用 `boyia_load_from` 新建，不跨调用复用 |
+| 实例 | `new(Config)` 从类模板拷贝属性；`this` 指向该实例的 `mParams` |
 
 ---
 
-## 9. 已实现 API（Phase 1）
+## 10. 相关文件
 
-| 宏 / 项 | 说明 |
-|---------|------|
-| `#[boyia_fields]` | 挂在 struct 上；生成 `boyia_attach_class_props`、`boyia_load_from`、`boyia_store_to` |
-| `#[boyia_default = "..."]` | 字段默认值（字符串字面量，由宏解析为 bool / 整数 / 浮点 / 空字符串） |
-| `#[boyia_class(..., fields)]` | `fields` 标志：注册属性槽位；sync 方法可用 `&self` / `&mut self` |
-| `runner/class_props.rs` | `attach_class_prop_*`、`prop_load_*`、`prop_store_*` |
-| `SyncCallSite::this_function()` | 读取 `BY_NAV_FUNC` 的 `this` 对象 |
-
-**限制（当前）：**
-
-- 仅 **sync** 方法支持 `self`；async 带 `self` 会在编译期报错
-- 字段类型：`bool`、整数、浮点、`String`
-- 示例类：`Config`（`getDebug` / `setDebug` / `getTimeout` / `setTimeout`）
-
-## 10. 总结
-
-在 builtins 中为 struct 定义字段，并通过扩展宏映射到 Boyia class 属性、在 sync/async builtin 中透明读写，**在架构上是可行且与 VM 设计一致的**。核心设计选择：
-
-1. **VM `mParams` 为唯一权威状态**，Rust struct 为每次调用的临时镜像
-2. **宏在 registrar 注册属性、在 handler 生成 load/store**
-3. **sync 全链路在 VM 线程**；**async 用快照 + `before` 写回**
-4. **大对象继续用 Handle 模式**，不与 class 标量属性混用
-
-建议从 Phase 1（sync + 标量字段）做 POC，再逐步覆盖异步与实例类。
+| 路径 | 职责 |
+|------|------|
+| `examples/boyia_cli/src/builtins/external/config.rs` | Config 源码 |
+| `examples/boyia_cli/src/builtins/mod.rs` | `DEFAULT_BUILTINS` 注册 |
+| `examples/boyia_cli/src/runner/macro/builtin_macro.rs` | `#[boyia_fields]`、`#[boyia_class]` 过程宏 |
+| `examples/boyia_cli/src/runner/class_props.rs` | 属性槽位 attach / load / store |
+| `examples/boyia_cli/src/runner/sync.rs` | `SyncCallSite`、`this_function()` |
+| `examples/boyia_cli/script/main.boyia` | 脚本调用示例（`testString` 内） |

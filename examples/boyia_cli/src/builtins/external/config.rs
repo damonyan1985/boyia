@@ -6,9 +6,9 @@ use builtin_macro::{boyia_class, boyia_fields};
 
 #[boyia_fields]
 pub struct ConfigBuiltins {
-    #[boyia_default = "false"]
+    #[boyia_field_default = "false"]
     debug: bool,
-    #[boyia_default = "30000"]
+    #[boyia_field_default = "30000"]
     timeout_ms: u64,
 }
 

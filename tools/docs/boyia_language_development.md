@@ -124,13 +124,14 @@ Boyia 的 builtin 分为两层：
 | 层级 | Crate / 目录 | 全局类 | 注册时机 |
 |------|----------------|--------|----------|
 | 运行时核心 | `crates/boyia_builtins` | `String`、`Map`、`Array`、`MicroTask` | `boyia_runtime` 初始化时自动注册 |
-| CLI 扩展 | `examples/boyia_cli/src/builtins` | `File`、`Https`、`Zip`、`Json`、`Tensor` | CLI 启动时通过 `DEFAULT_BUILTINS` 注册 |
+| CLI 扩展 | `examples/boyia_cli/src/builtins` | `File`、`Https`、`Zip`、`Json`、`Tensor`、`Config` 等 | CLI 启动时通过 `DEFAULT_BUILTINS` 注册 |
 
 CLI 侧目录与入口：
 
 | 路径 | 职责 |
 |------|------|
 | `builtins/utility/` | `File`、`Https`、`Zip`、`Json` |
+| `builtins/external/` | 带 Rust 字段映射的扩展类（如 `Config`） |
 | `builtins/ai/tensor.rs` | `Tensor` 工厂与句柄管理 |
 | `builtins/mod.rs` | `DEFAULT_BUILTINS` 注册表 |
 | `runner/async.rs`、`runner/sync.rs` | 异步 / 同步 native 基础设施 |
@@ -181,7 +182,9 @@ impl FileBuiltins {
 
 约束：
 
-- `impl` 内只能是带上述属性的关联函数，不能有 `self`。
+- `impl` 内只能是带上述属性的关联函数。
+- 默认情况下方法**不带 `self`**（如 `File`、`Json`）。
+- 若需将 Rust struct **字段**映射为 Boyia 对象属性，并在方法里用 `&self` / `&mut self` 读写，见 **[6.6 Rust struct 字段映射](#66-rust-struct-字段映射config)**。
 - 异步 work 函数返回 `AsyncBuiltinResult`（见 6.2）。
 - 同步 work 函数常见返回类型见下表。
 
@@ -210,6 +213,7 @@ impl FileBuiltins {
 ```rust
 // examples/boyia_cli/src/builtins/mod.rs
 pub const DEFAULT_BUILTINS: &[BuiltinRegistrar] = &[
+    external::config::builtin_config_class,
     utility::https::builtin_https_class,
     utility::file::builtin_file_class,
     utility::zip::builtin_zip_class,
@@ -348,7 +352,47 @@ Tensor.destroy(id);
 
 Rust 侧 `.map(store_tensor)` 是标准库 **`Option::map`**：仅当 `BoyiaTensor::from_nested` 返回 `Some` 时才写入 registry，不是张量的逐元素 `map` 运算。
 
-### 6.6 底层手写 native（可选）
+### 6.6 Rust struct 字段映射（Config）
+
+除 **6.1** 的「仅方法、无 `self`」写法外，CLI 还支持把 Rust struct **字段**注册为 Boyia 对象属性，并在 **sync** 方法中通过 `&self` / `&mut self` 读写（如 `Config` 的 `debug`、`timeout_ms`）。
+
+典型写法（源码见 `builtins/external/config.rs`）：
+
+```rust
+use builtin_macro::{boyia_class, boyia_fields};
+
+#[boyia_fields]
+pub struct ConfigBuiltins {
+    #[boyia_field_default = "false"]
+    debug: bool,
+    #[boyia_field_default = "30000"]
+    timeout_ms: u64,
+}
+
+#[boyia_class(name = "Config", registrar = builtin_config_class, fields)]
+impl ConfigBuiltins {
+    #[boyia_sync_builtin(native = config_set_timeout_native, method = "setTimeout")]
+    fn set_timeout(&mut self, ms: u64) {
+        self.timeout_ms = ms;
+    }
+}
+```
+
+脚本侧：
+
+```boyia
+var config = new(Config);
+config.setTimeout(5333);
+Util.log("timeout: " + config.getTimeout());
+```
+
+**完整说明**（注册流程、运行时 load/store、`#[boyia_fields]` / `#[boyia_class]` 宏展开、字段与方法映射对照）见专用文档：
+
+**[Builtin 字段与 Boyia 对象映射](./builtin_struct_fields_mapping.md)**
+
+当前限制摘要：`fields` 模式仅支持标量字段（`bool`、整数、浮点、`String`）；带 `self` 的方法仅 **sync**；持久状态在 VM `mParams`，每次调用临时 `boyia_load_from` 构造 Rust 镜像。
+
+### 6.7 底层手写 native（可选）
 
 若不使用宏，仍可参照 `boyia_builtins` 或 `boyia_lib`：`create_global_class` + `gen_builtin_class_function`，在 native 中手动读 local、写结果。CLI 的 File / Https / Zip / Json / Tensor 已统一改为宏写法，新扩展建议沿用 **6.1**。
 
@@ -479,4 +523,4 @@ d.run();
 
 ---
 
-**延伸阅读：** [仓库 README](../../README.md) · [Boyia IDE 扩展](../plugin/README.md)
+**延伸阅读：** [仓库 README](../../README.md) · [Boyia IDE 扩展](../plugin/README.md) · [Builtin 字段与 Boyia 对象映射](./builtin_struct_fields_mapping.md)
