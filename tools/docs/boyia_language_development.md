@@ -352,16 +352,16 @@ Tensor.destroy(id);
 
 Rust 侧 `.map(store_tensor)` 是标准库 **`Option::map`**：仅当 `BoyiaTensor::from_nested` 返回 `Some` 时才写入 registry，不是张量的逐元素 `map` 运算。
 
-### 6.6 Rust struct 字段映射（Config）
+### 6.6 Rust native 对象（Config）
 
-除 **6.1** 的「仅方法、无 `self`」写法外，CLI 还支持把 Rust struct **字段**注册为 Boyia 对象属性，并在 **sync** 方法中通过 `&self` / `&mut self` 读写（如 `Config` 的 `debug`、`timeout_ms`）。
+除 **6.1** 的「仅方法、无 `self`」写法外，CLI 还支持把 Rust struct 状态放在 **`Box<T>` + `nativePtr`** 上，并在 **sync** 方法中通过 `&self` / `&mut self` 读写（如 `Config` 的 `debug`、`timeout_ms`）。
 
 典型写法（源码见 `builtins/external/config.rs`）：
 
 ```rust
-use builtin_macro::{boyia_class, boyia_fields};
+use builtin_macro::{boyia_class, boyia_native_object};
 
-#[boyia_fields]
+#[boyia_native_object]
 pub struct ConfigBuiltins {
     #[boyia_field_default = "false"]
     debug: bool,
@@ -369,7 +369,7 @@ pub struct ConfigBuiltins {
     timeout_ms: u64,
 }
 
-#[boyia_class(name = "Config", registrar = builtin_config_class, fields)]
+#[boyia_class(name = "Config", registrar = builtin_config_class, native)]
 impl ConfigBuiltins {
     #[boyia_sync_builtin(native = config_set_timeout_native, method = "setTimeout")]
     fn set_timeout(&mut self, ms: u64) {
@@ -386,11 +386,11 @@ config.setTimeout(5333);
 Util.log("timeout: " + config.getTimeout());
 ```
 
-**完整说明**（注册流程、运行时 load/store、`#[boyia_fields]` / `#[boyia_class]` 宏展开、字段与方法映射对照）见专用文档：
+**完整说明**（注册流程、`nativePtr` 懒分配、`#[boyia_native_object]` / `#[boyia_class(..., native)]` 宏展开、方法与 GC）见专用文档：
 
-**[Builtin 字段与 Boyia 对象映射](./builtin_struct_fields_mapping.md)**
+**[Builtin Native 对象映射](./builtin_struct_fields_mapping.md)**
 
-当前限制摘要：`fields` 模式仅支持标量字段（`bool`、整数、浮点、`String`）；带 `self` 的方法仅 **sync**；持久状态在 VM `mParams`，每次调用临时 `boyia_load_from` 构造 Rust 镜像。
+当前限制摘要：`native` 模式字段类型为标量（`bool`、整数、浮点、`String`）；带 `self` 的方法仅 **sync**；持久状态在 Rust `Box` 内，通过 `nativePtr` 关联实例；脚本只能通过方法访问，不能直接读写字段属性。
 
 ### 6.7 底层手写 native（可选）
 
@@ -523,4 +523,4 @@ d.run();
 
 ---
 
-**延伸阅读：** [仓库 README](../../README.md) · [Boyia IDE 扩展](../plugin/README.md) · [Builtin 字段与 Boyia 对象映射](./builtin_struct_fields_mapping.md)
+**延伸阅读：** [仓库 README](../../README.md) · [Boyia IDE 扩展](../plugin/README.md) · [Builtin Native 对象映射](./builtin_struct_fields_mapping.md)

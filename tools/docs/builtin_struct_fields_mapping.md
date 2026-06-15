@@ -1,8 +1,10 @@
-# Builtin 字段与 Boyia 对象映射
+# Builtin Native 对象映射（`#[boyia_native_object]`）
 
-本文以 `examples/boyia_cli/src/builtins/external/config.rs` 中的 **Config** 内置类为例，说明 Rust struct 字段如何映射为 Boyia 对象属性，以及 `#[boyia_fields]` / `#[boyia_class]` 的完整使用与宏展开流程。
+本文以 `examples/boyia_cli/src/builtins/external/config.rs` 中的 **Config** 内置类为例，说明 Rust struct 如何通过 `nativePtr` + `Box<T>` 挂到 Boyia 实例上，以及 `#[boyia_native_object]` / `#[boyia_class(..., native)]` 的完整使用与宏展开流程。
 
 相关总览见 [Boyia 语言开发文档](./boyia_language_development.md) 第 6 节。
+
+> **说明：** 旧版 `#[boyia_fields]`（把字段镜像到 VM `mParams`、每次调用 `load`/`store`）已移除。带 `self` 的 builtin 类统一使用本文描述的 **native object** 方案。
 
 ---
 
@@ -11,9 +13,9 @@
 ```rust
 // examples/boyia_cli/src/builtins/external/config.rs
 
-use builtin_macro::{boyia_class, boyia_fields};
+use builtin_macro::{boyia_class, boyia_native_object};
 
-#[boyia_fields]
+#[boyia_native_object]
 pub struct ConfigBuiltins {
     #[boyia_field_default = "false"]
     debug: bool,
@@ -21,7 +23,7 @@ pub struct ConfigBuiltins {
     timeout_ms: u64,
 }
 
-#[boyia_class(name = "Config", registrar = builtin_config_class, fields)]
+#[boyia_class(name = "Config", registrar = builtin_config_class, native)]
 impl ConfigBuiltins {
     #[boyia_sync_builtin(native = config_get_debug_native, method = "getDebug")]
     fn get_debug(&self) -> bool {
@@ -45,13 +47,13 @@ impl ConfigBuiltins {
 }
 ```
 
-三个宏分工：
+宏分工：
 
 | 宏 | 挂在哪 | 作用 |
 |----|--------|------|
-| `#[boyia_fields]` | `struct ConfigBuiltins` | 把字段注册为 Boyia 属性，并生成 `boyia_load_from` / `boyia_store_to` |
-| `#[boyia_field_default = "..."]` | 字段上 | 注册时的默认值 |
-| `#[boyia_class(name = "Config", registrar = ..., fields)]` | `impl` 上 | 注册 Boyia 类与方法；`fields` 开启字段 load/store |
+| `#[boyia_native_object]` | `struct ConfigBuiltins` | 注入 `__boyia_hdr`、实现 `NativePropTrait`，生成 `boyia_default()` |
+| `#[boyia_field_default = "..."]` | 字段上 | `Box` 首次分配时的字段初值 |
+| `#[boyia_class(name = "Config", registrar = ..., native)]` | `impl` 上 | 注册 Boyia 类与方法；`native` 挂 `nativePtr` 槽并在 handler 里走 `boyia_native_ref` / `boyia_native_mut` |
 | `#[boyia_sync_builtin(...)]` | 方法上 | 把 Rust 方法映射为脚本可调用的同步 native 方法 |
 
 ### 1.1 `#[boyia_field_default]` 支持的字段类型
@@ -61,23 +63,11 @@ impl ConfigBuiltins {
 | Rust 字段类型 | `boyia_field_default` 示例 | 省略时的默认值 | 说明 |
 |---------------|------------------------------|----------------|------|
 | `bool` | `#[boyia_field_default = "true"]` | `false` | 仅 `"true"` 为 true，其余为 false |
-| `String` | `#[boyia_field_default = "production"]` | `""`（空字符串） | 引号内为 Boyia 属性初始文本 |
+| `String` | `#[boyia_field_default = "production"]` | `""`（空字符串） | 写入 `Box` 初值 |
 | `f32` / `f64` | `#[boyia_field_default = "1.5"]` | `0.0` | 按浮点解析 |
 | `u64` / `usize` | `#[boyia_field_default = "30000"]` | `0` | 按无符号整数解析 |
 | `i8` / `i16` / `i32` / `i64` / `isize` | `#[boyia_field_default = "-1"]` | `0` | 按有符号整数解析 |
-| `u8` / `u16` / `u32` | `#[boyia_field_default = "255"]` | `0` | 存入 VM `BY_INT` 槽位 |
-
-示例（含 `String` 字段）：
-
-```rust
-#[boyia_fields]
-pub struct AppBuiltins {
-    #[boyia_field_default = "development"]
-    env: String,
-    #[boyia_field_default = "30000"]
-    timeout_ms: u64,
-}
-```
+| `u8` / `u16` / `u32` | `#[boyia_field_default = "255"]` | `0` | 按有符号解析后转型 |
 
 未列出的类型（如 `Option<T>`、`Vec<T>`、自定义 struct）暂不支持，编译期会报错。
 
@@ -102,7 +92,7 @@ BoyiaRunner::create(registrars) 在 Boyia 任务线程依次调用 registrar
     │
     ▼
 register_async_builtin_class(vm, gen_id, "Config", |class_body, ...| {
-    ConfigBuiltins::boyia_attach_class_props(...)   // 先挂字段属性
+    attach_native_ptr_slot(class_body, gen_id)   // 挂 nativePtr 槽（index 0）
     attach_method(..., "getDebug",  ...)
     attach_method(..., "setDebug",  ...)
     attach_method(..., "getTimeout", ...)
@@ -112,8 +102,10 @@ register_async_builtin_class(vm, gen_id, "Config", |class_body, ...| {
 
 注册完成后，VM 里存在全局类 **Config**：
 
-- **属性**（来自 struct 字段）：`debug`、`timeout_ms`（存在 `mParams` 槽位 0、1）
+- **内部槽位**：`nativePtr`（`mParams[0]`，`BY_NAVCLASS`，初值 0）
 - **方法**（来自 `#[boyia_sync_builtin]`）：`getDebug`、`setDebug`、`getTimeout`、`setTimeout`
+
+Rust 字段（`debug`、`timeout_ms`）**不会**注册为脚本可访问的 Boyia 属性；脚本只能通过方法读写。
 
 注册表入口：
 
@@ -140,22 +132,24 @@ Util.log("config.getTimeout() : " + config.getTimeout());
 ```
 new(Config)
   → VM 从 Config 类模板 copy 出实例
-  → 实例 mParams 带上 debug=false、timeout_ms=30000（默认值）
+  → 实例 mParams[0]（nativePtr）= 0，尚未分配 Rust Box
 
 config.setTimeout(5333)
   → 调用 native config_set_timeout_native
-  → Rust handler：load → set_timeout → store
+  → handler：boyia_native_mut → 首次分配 Box<ConfigBuiltins>（默认值 debug=false, timeout_ms=30000）
+  → set_timeout 写入 timeout_ms = 5333（直接改堆上 Box，无 load/store）
 
 config.getTimeout()
-  → 调用 native config_get_timeout_native
-  → Rust handler：load → get_timeout（返回 timeout_ms * 2）→ 不 store
+  → handler：boyia_native_ref → 复用已有 Box
+  → get_timeout 返回 timeout_ms * 2
   → 日志打印 10666（5333 * 2）
 ```
 
 说明：
 
-- **方法**（`setTimeout` / `getTimeout`）是脚本主要入口。
-- **字段**（`debug`、`timeout_ms`）挂在对象 `mParams` 上；Rust 方法通过 `self.debug` / `self.timeout_ms` 读写。脚本也可按属性名访问（如 `config.timeout_ms`），但命名是 Rust 字段名（蛇形），与方法名（驼峰）不同。
+- **方法**（`setTimeout` / `getTimeout`）是脚本唯一入口。
+- **字段**（`debug`、`timeout_ms`）只存在于 Rust `Box` 内，脚本不能写 `config.timeout_ms`。
+- 实例在**第一次**带 `self` 的 native 调用时才懒分配 `Box`；GC 通过 `nativePtr` + vtable 跟踪这块堆内存。
 
 ---
 
@@ -178,30 +172,32 @@ config.getTimeout()
 │   → set_timeout_handler(&mut SyncCallSite)                   │
 └────────────────────────────┬────────────────────────────────┘
                              ▼
-  ① class_body = site.this_function()     // 拿到 this 的 mParams 容器
-  ② state = ConfigBuiltins::boyia_load_from(class_body)
-       // 新建临时 struct：{ debug: ..., timeout_ms: 5333 之前的值 }
-  ③ ms = site.arg_i64(1) as u64           // 从 VM 读脚本参数 5333
-  ④ ConfigBuiltins::set_timeout(&mut state, ms)
-       // 执行你写的：self.timeout_ms = ms
-  ⑤ state.boyia_store_to(class_body, vm)  // 写回 mParams[1]
-  ⑥ set_sync_return((), vm)               // 返回给脚本
+  ① class_body = site.this_function()     // 拿到 this（实例 BoyiaFunction）
+  ② rt = get_runtime_from_vm(site.vm())
+  ③ state = boyia_native_mut::<ConfigBuiltins>(class_body, rt)
+       // nativePtr 为 0 时：Box::new(boyia_default())，写入 nativePtr，gc_append_ref
+       // 已有 Box 时：直接返回 &mut T
+  ④ ms = site.arg_i64(1) as u64           // 从 VM 读脚本参数 5333
+  ⑤ ConfigBuiltins::set_timeout(state, ms)
+       // 直接改堆上 Box：state.timeout_ms = ms
+  ⑥ set_sync_return((), vm)               // 返回给脚本（无 store 回 mParams）
                              ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ config 实例上 timeout_ms 属性 = 5333                         │
+│ Box<ConfigBuiltins>.timeout_ms == 5333                       │
+│ nativePtr 仍指向同一块堆内存                                  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-`get_timeout`（`&self`）流程相同，但**没有第 ⑤ 步**——只读，不写回 VM。
+`get_timeout`（`&self`）流程相同，但第 ③ 步用 `boyia_native_ref`（只读引用），且**无写回步骤**——状态本来就在 `Box` 里。
 
 ---
 
-## 5. `#[boyia_fields]` 宏展开流程
+## 5. `#[boyia_native_object]` 宏展开流程
 
 **输入**（你写的 struct）：
 
 ```rust
-#[boyia_fields]
+#[boyia_native_object]
 pub struct ConfigBuiltins {
     #[boyia_field_default = "false"]
     debug: bool,
@@ -213,65 +209,61 @@ pub struct ConfigBuiltins {
 **宏在编译期做的事：**
 
 1. 解析每个字段的名字、类型、`#[boyia_field_default]`
-2. 按声明顺序分配固定槽位索引：`debug → 0`，`timeout_ms → 1`
-3. 生成 `impl ConfigBuiltins { ... }` 辅助方法
+2. 给 struct 加 `#[repr(C)]`，并在**首位**插入 `__boyia_hdr: NativePropHeader`
+3. 生成 `NativePropTrait` 实现（vtable、`boyia_default`、`native_drop`）
 
 **展开结果（概念代码，省略属性清理）：**
 
 ```rust
+#[repr(C)]
 pub struct ConfigBuiltins {
+    __boyia_hdr: boyia_gc::NativePropHeader,
     debug: bool,
     timeout_ms: u64,
 }
 
 impl ConfigBuiltins {
-    pub const BOYIA_FIELD_DEBUG: usize = 0;
-    pub const BOYIA_FIELD_TIMEOUT_MS: usize = 1;
-
-    /// 注册期：把字段挂到 class_body.mParams
-    pub unsafe fn boyia_attach_class_props(
-        class_body: *mut BoyiaFunction,
-        vm: &mut BoyiaVM,
-        gen_id: &mut dyn FnMut(&str) -> LUintPtr,
-    ) {
-        class_props::attach_class_prop_bool(class_body, gen_id("debug"), false);
-        class_props::attach_class_prop_i64(class_body, gen_id("timeout_ms"), 30000);
+    fn boyia_new_header() -> boyia_gc::NativePropHeader {
+        boyia_gc::NativePropHeader::new(&<Self as boyia_gc::NativePropTrait>::VTABLE)
     }
+}
 
-    /// 调用期：VM 属性 → 临时 Rust struct（每次调用新建一个）
-    pub unsafe fn boyia_load_from(class_body: *mut BoyiaFunction) -> Self {
+impl boyia_gc::NativePropTrait for ConfigBuiltins {
+    const VTABLE: boyia_gc::NativePropVTable = boyia_gc::NativePropVTable {
+        mark_fn: Self::native_mark,
+        flag_fn: Self::native_flag,
+        drop_fn: Self::native_drop,
+    };
+
+    fn boyia_default() -> Self {
         Self {
-            debug: class_props::prop_load_bool(class_body, Self::BOYIA_FIELD_DEBUG),
-            timeout_ms: class_props::prop_load_u64(class_body, Self::BOYIA_FIELD_TIMEOUT_MS),
+            __boyia_hdr: Self::boyia_new_header(),
+            debug: false,
+            timeout_ms: 30000,
         }
     }
 
-    /// 调用期：临时 Rust struct → VM 属性（仅 &mut self 方法结束后调用）
-    pub unsafe fn boyia_store_to(
-        &self,
-        class_body: *mut BoyiaFunction,
-        vm: &mut BoyiaVM,
-    ) {
-        class_props::prop_store_bool(class_body, Self::BOYIA_FIELD_DEBUG, self.debug);
-        class_props::prop_store_u64(class_body, Self::BOYIA_FIELD_TIMEOUT_MS, self.timeout_ms);
+    unsafe fn native_drop(ptr: *mut LVoid) {
+        let _ = Box::from_raw(ptr as *mut Self);
     }
 }
 ```
 
 要点：
 
-- **持久状态在 VM 的 `mParams`**，不在 Rust 堆里长期保存 `ConfigBuiltins`。
-- **`boyia_load_from` 每次调用都会 `Self { ... }` 新建一个临时 struct**。
+- **持久状态在 Rust 堆上的 `Box<T>`**，通过实例 `mParams[0]`（`nativePtr`）关联。
+- **懒分配**：`boyia_ensure_native` 在首次 `ref`/`mut` 时 `Box::new(T::boyia_default())`。
+- **GC**：`gc_append_ref` 登记指针；回收时 vtable `drop_fn` 释放 `Box`。
 - 宏**不会改写**你方法体里的 `self.timeout_ms`，那就是普通 Rust 字段访问。
 
 ---
 
-## 6. `#[boyia_class(..., fields)]` 宏展开流程
+## 6. `#[boyia_class(..., native)]` 宏展开流程
 
 **输入**（你写的 impl）：
 
 ```rust
-#[boyia_class(name = "Config", registrar = builtin_config_class, fields)]
+#[boyia_class(name = "Config", registrar = builtin_config_class, native)]
 impl ConfigBuiltins {
     #[boyia_sync_builtin(native = config_set_timeout_native, method = "setTimeout")]
     fn set_timeout(&mut self, ms: u64) {
@@ -283,7 +275,7 @@ impl ConfigBuiltins {
 
 **宏在编译期对每个 `#[boyia_sync_builtin]` 方法：**
 
-1. 识别 `&self` / `&mut self` / 无 self
+1. 识别 `&self` / `&mut self` / 无 self（带 `self` 时必须配合 `native`）
 2. 保留方法体，重新输出到 `impl ConfigBuiltins { ... }`
 3. 生成 `{方法名}_handler` + `define_sync_native!`
 4. 生成 `builtin_config_class` 注册函数
@@ -302,20 +294,24 @@ impl ConfigBuiltins {
 // B. 生成的 handler（VM 实际入口）
 fn set_timeout_handler(site: &mut SyncCallSite<'_>) -> OpHandleResult {
     let class_body = some_or_end!(site.this_function());
-    let mut state = unsafe { ConfigBuiltins::boyia_load_from(class_body) };
+    let rt = unsafe { get_runtime_from_vm(site.vm()) };
+    if rt.is_null() {
+        return OpHandleResult::kOpResultEnd;
+    }
+    let state = unsafe {
+        boyia_gc::boyia_native_mut::<ConfigBuiltins>(class_body, &mut *rt)
+    };
 
     let ms = some_or_end!(site.arg_i64(1)) as u64;
 
-    let __sync_result = ConfigBuiltins::set_timeout(&mut state, ms);
-
-    unsafe { state.boyia_store_to(class_body, site.vm()); }
+    let __sync_result = ConfigBuiltins::set_timeout(state, ms);
 
     crate::runner::sync::set_sync_return(__sync_result, site.vm())
 }
 
 // C. 注册为 native 函数
 unsafe fn config_set_timeout_native(vm: &mut BoyiaVM) -> OpHandleResult {
-    sync_dispatch(vm, 2, set_timeout_handler)  // min_locals = 参数数 + 1
+    sync_dispatch(vm, 2, set_timeout_handler)  // min_locals = 参数数 + 2（含 this）
 }
 
 // D. 类注册器
@@ -324,7 +320,7 @@ pub fn builtin_config_class(
     gen_id: &mut dyn FnMut(&str) -> LUintPtr,
 ) {
     register_async_builtin_class(vm, gen_id, "Config", |class_body, vm, gen_id| {
-        unsafe { ConfigBuiltins::boyia_attach_class_props(class_body, vm, gen_id); }
+        unsafe { boyia_gc::attach_native_ptr_slot(class_body, gen_id); }
         attach_method(gen_id, "getDebug",    config_get_debug_native,    class_body, vm);
         attach_method(gen_id, "setDebug",    config_set_debug_native,    class_body, vm);
         attach_method(gen_id, "getTimeout",  config_get_timeout_native,  class_body, vm);
@@ -338,31 +334,37 @@ pub fn builtin_config_class(
 ```rust
 fn get_timeout_handler(site: &mut SyncCallSite<'_>) -> OpHandleResult {
     let class_body = some_or_end!(site.this_function());
-    let mut state = unsafe { ConfigBuiltins::boyia_load_from(class_body) };
+    let rt = unsafe { get_runtime_from_vm(site.vm()) };
+    if rt.is_null() {
+        return OpHandleResult::kOpResultEnd;
+    }
+    let state = unsafe {
+        boyia_gc::boyia_native_ref::<ConfigBuiltins>(class_body, &mut *rt)
+    };
 
-    let __sync_result = ConfigBuiltins::get_timeout(&state);
-    // 无 boyia_store_to
+    let __sync_result = ConfigBuiltins::get_timeout(state);
 
     set_sync_return(__sync_result, site.vm())
 }
 ```
 
-`ConfigBuiltins::set_timeout(&mut state, ms)` 与 `state.set_timeout(ms)` 完全等价；宏选用关联函数写法，因为 handler 里已有名为 `state` 的局部变量。
+`ConfigBuiltins::set_timeout(state, ms)` 与 `state.set_timeout(ms)` 完全等价；宏选用关联函数写法，因为 handler 里已有名为 `state` 的局部变量。
 
 ---
 
 ## 7. 字段 vs 方法：分别映射到什么
 
-| Rust 侧 | Boyia 侧 | 脚本示例 |
-|---------|----------|----------|
-| 字段 `debug` | 属性 `debug`（`mParams[0]`） | `config.debug`（属性名，蛇形） |
-| 字段 `timeout_ms` | 属性 `timeout_ms`（`mParams[1]`） | `config.timeout_ms` |
+| Rust 侧 | Boyia / 运行时侧 | 脚本示例 |
+|---------|------------------|----------|
+| 字段 `debug` | `Box` 内字段（脚本不可见） | 无；用 `config.getDebug()` |
+| 字段 `timeout_ms` | `Box` 内字段（脚本不可见） | 无；用 `config.getTimeout()` / `setTimeout` |
 | 方法 `get_debug` | 方法 `getDebug` | `config.getDebug()` |
 | 方法 `set_debug` | 方法 `setDebug` | `config.setDebug(true)` |
 | 方法 `get_timeout` | 方法 `getTimeout` | `config.getTimeout()` → 返回 `timeout_ms * 2` |
 | 方法 `set_timeout` | 方法 `setTimeout` | `config.setTimeout(5333)` |
+| （内部）`nativePtr` | `mParams[0]`，`BY_NAVCLASS` | 脚本不应直接访问 |
 
-注意 `get_timeout` 的返回值是**方法逻辑**（乘 2），不是字段原值。字段原值存在 `timeout_ms` 属性上。
+注意 `get_timeout` 的返回值是**方法逻辑**（乘 2），不是字段原值。
 
 ---
 
@@ -371,21 +373,25 @@ fn get_timeout_handler(site: &mut SyncCallSite<'_>) -> OpHandleResult {
 ```
                     注册期（进程启动一次）
 ┌──────────────────────────────────────────────────┐
-│ ConfigBuiltins::boyia_attach_class_props          │
-│   mParams[0] ← debug      (default false)          │
-│   mParams[1] ← timeout_ms (default 30000)        │
-│ attach_method × 4                                 │
+│ attach_native_ptr_slot(class_body)                │
+│   mParams[0] ← nativePtr (BY_NAVCLASS, 0)        │
+│ attach_method × N                                 │
 └──────────────────────────────────────────────────┘
 
-                    运行期（每次方法调用）
-┌──────────────┐    load     ┌─────────────────┐    store    ┌──────────────┐
-│ VM mParams   │ ──────────► │ ConfigBuiltins  │ ──────────► │ VM mParams   │
-│ (权威存储)   │             │ (临时栈上副本)   │  仅 &mut self │ (权威存储)   │
-└──────────────┘             └─────────────────┘             └──────────────┘
+                    运行期（首次带 self 的调用）
+┌──────────────┐   ensure    ┌─────────────────────┐
+│ VM 实例      │ ──────────► │ Box<ConfigBuiltins> │
+│ nativePtr    │ ◄────────── │ （Rust 堆，权威状态）  │
+│ mParams[0]   │   指针写入   │ debug, timeout_ms   │
+└──────────────┘             └─────────────────────┘
                                       │
                                       ▼
+                             boyia_native_ref / mut
                              你写的 impl 方法
                              self.debug / self.timeout_ms
+                                      │
+                                      ▼
+                             GC：vtable mark / drop
 ```
 
 ---
@@ -396,9 +402,11 @@ fn get_timeout_handler(site: &mut SyncCallSite<'_>) -> OpHandleResult {
 |----|------|
 | 带 `self` 的方法 | 仅 **sync**（`#[boyia_sync_builtin]`）；async 带 `self` 编译报错 |
 | 字段类型 | `bool`、整数、浮点、`String` |
-| 写回时机 | 仅 `&mut self` 的 sync 方法在返回前 `boyia_store_to` |
-| 临时 struct | 每次调用 `boyia_load_from` 新建，不跨调用复用 |
-| 实例 | `new(Config)` 从类模板拷贝属性；`this` 指向该实例的 `mParams` |
+| 状态位置 | Rust `Box`，非 VM `mParams` 属性镜像 |
+| 写回 | `&mut self` 直接改 `Box`，无 `boyia_store_to` |
+| 脚本访问字段 | 不支持；仅通过方法 |
+| 实例 | `new(Config)` 拷贝类模板；`Box` 在首次 native 调用时懒分配 |
+| GC | 依赖 `NativePropTrait` vtable；对象不可达时 `native_drop` 释放 `Box` |
 
 ---
 
@@ -408,7 +416,7 @@ fn get_timeout_handler(site: &mut SyncCallSite<'_>) -> OpHandleResult {
 |------|------|
 | `examples/boyia_cli/src/builtins/external/config.rs` | Config 源码 |
 | `examples/boyia_cli/src/builtins/mod.rs` | `DEFAULT_BUILTINS` 注册 |
-| `examples/boyia_cli/src/runner/macro/builtin_macro.rs` | `#[boyia_fields]`、`#[boyia_class]` 过程宏 |
-| `examples/boyia_cli/src/runner/class_props.rs` | 属性槽位 attach / load / store |
+| `examples/boyia_cli/src/runner/macro/builtin_macro.rs` | `#[boyia_native_object]`、`#[boyia_class]` 过程宏 |
+| `crates/boyia_gc/src/native_gc.rs` | `nativePtr` 槽、`boyia_ensure_native`、`NativePropTrait` |
 | `examples/boyia_cli/src/runner/sync.rs` | `SyncCallSite`、`this_function()` |
 | `examples/boyia_cli/script/main.boyia` | 脚本调用示例（`testString` 内） |
