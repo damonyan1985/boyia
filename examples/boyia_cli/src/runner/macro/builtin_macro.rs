@@ -70,13 +70,13 @@ enum SelfArg {
 }
 
 struct AsyncMethodConfig {
-    native: syn::Ident,
+    native: Option<syn::Ident>,
     method: LitStr,
     before: Option<syn::Path>,
 }
 
 struct SyncMethodConfig {
-    native: syn::Ident,
+    native: Option<syn::Ident>,
     method: LitStr,
 }
 
@@ -112,7 +112,7 @@ fn parse_async_config(meta: &Meta) -> syn::Result<AsyncMethodConfig> {
     let Meta::List(list) = meta else {
         return Err(syn::Error::new_spanned(
             meta,
-            "expected `#[boyia_async_builtin(native = ..., method = \"...\")]`",
+            "expected `#[boyia_async_builtin(method = \"...\")]`",
         ));
     };
     syn::parse2(list.tokens.clone())
@@ -144,7 +144,7 @@ impl Parse for AsyncMethodConfig {
                     return Err(syn::Error::new(
                         key.span(),
                         format!(
-                            "unknown key `{other}`, expected `native`, `method`, or `before`"
+                            "unknown key `{other}`, expected `method`, `native`, or `before`"
                         ),
                     ));
                 }
@@ -155,9 +155,7 @@ impl Parse for AsyncMethodConfig {
         }
 
         Ok(AsyncMethodConfig {
-            native: native.ok_or_else(|| {
-                syn::Error::new(Span::call_site(), "missing `native = ...` in attribute")
-            })?,
+            native,
             method: method.ok_or_else(|| {
                 syn::Error::new(Span::call_site(), "missing `method = \"...\"` in attribute")
             })?,
@@ -170,7 +168,7 @@ fn parse_sync_config(meta: &Meta) -> syn::Result<SyncMethodConfig> {
     let Meta::List(list) = meta else {
         return Err(syn::Error::new_spanned(
             meta,
-            "expected `#[boyia_sync_builtin(native = ..., method = \"...\")]`",
+            "expected `#[boyia_sync_builtin(method = \"...\")]`",
         ));
     };
     syn::parse2(list.tokens.clone())
@@ -202,7 +200,7 @@ impl Parse for SyncMethodConfig {
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
-                        format!("unknown key `{other}`, expected `native` or `method`"),
+                        format!("unknown key `{other}`, expected `method` or `native`"),
                     ));
                 }
             }
@@ -212,9 +210,7 @@ impl Parse for SyncMethodConfig {
         }
 
         Ok(SyncMethodConfig {
-            native: native.ok_or_else(|| {
-                syn::Error::new(Span::call_site(), "missing `native = ...` in attribute")
-            })?,
+            native,
             method: method.ok_or_else(|| {
                 syn::Error::new(Span::call_site(), "missing `method = \"...\"` in attribute")
             })?,
@@ -628,6 +624,14 @@ fn validate_sync_return(ty: &Type) -> syn::Result<()> {
     }
 }
 
+/// VM native symbol: `{work_name}_native`, unless `native = ...` overrides.
+fn resolve_native_name(work_name: &syn::Ident, override_native: Option<&syn::Ident>) -> syn::Ident {
+    match override_native {
+        Some(id) => id.clone(),
+        None => format_ident!("{}_native", work_name),
+    }
+}
+
 fn expand_async_method(
     config: &AsyncMethodConfig,
     func: &ItemFn,
@@ -646,7 +650,7 @@ fn expand_async_method(
     let work_name = &func.sig.ident;
     let schedule_name = format_ident!("schedule_{}", work_name);
     let handler_name = format_ident!("{}_handler", work_name);
-    let native_name = &config.native;
+    let native_name = resolve_native_name(work_name, config.native.as_ref());
     let required_args = args
         .iter()
         .filter(|a| a.optional_default.is_none())
@@ -711,7 +715,7 @@ fn expand_sync_method(
 
     let work_name = &func.sig.ident;
     let handler_name = format_ident!("{}_handler", work_name);
-    let native_name = &config.native;
+    let native_name = resolve_native_name(work_name, config.native.as_ref());
     let required_args = args
         .iter()
         .filter(|a| a.optional_default.is_none())
@@ -840,16 +844,23 @@ fn expand_class(class_config: &ClassConfig, imp: &ItemImpl) -> syn::Result<proc_
             ));
         };
 
+        let work_name = &func.sig.ident;
         let (method_lit, native_name) = match &kind {
             BuiltinKind::Async(cfg) => {
                 method_expansions.push(expand_async_method(cfg, &func, &struct_ty)?);
-                (&cfg.method, &cfg.native)
+                (
+                    &cfg.method,
+                    resolve_native_name(work_name, cfg.native.as_ref()),
+                )
             }
             BuiltinKind::Sync(cfg) => {
                 method_expansions.push(expand_sync_method(
                     cfg, &func, &struct_ty, has_native,
                 )?);
-                (&cfg.method, &cfg.native)
+                (
+                    &cfg.method,
+                    resolve_native_name(work_name, cfg.native.as_ref()),
+                )
             }
         };
 
@@ -1059,10 +1070,10 @@ pub fn boyia_native_object(_attr: TokenStream, item: TokenStream) -> TokenStream
 ///
 /// #[boyia_class(name = "File", registrar = builtin_file_class)]
 /// impl FileBuiltins {
-///     #[boyia_async_builtin(native = file_read_native, method = "read")]
+///     #[boyia_async_builtin(method = "read")]
 ///     fn file_read(path: String) -> AsyncBuiltinResult { ... }
 ///
-///     #[boyia_sync_builtin(native = file_is_absolute_native, method = "isAbsolute")]
+///     #[boyia_sync_builtin(method = "isAbsolute")]
 ///     fn file_is_absolute(path: String) -> bool { ... }
 /// }
 /// ```

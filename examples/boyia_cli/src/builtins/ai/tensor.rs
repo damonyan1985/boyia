@@ -435,7 +435,7 @@ struct TensorBuiltins;
 
 #[boyia_class(name = "Tensor", registrar = builtin_tensor_class)]
 impl TensorBuiltins {
-    #[boyia_sync_builtin(native = tensor_empty_native, method = "empty")]
+    #[boyia_sync_builtin(method = "empty")]
     fn tensor_empty(
         shape: Vec<usize>,
         #[optional(default = "float32")]
@@ -449,7 +449,7 @@ impl TensorBuiltins {
             .unwrap_or(TENSOR_HANDLE_INVALID)
     }
 
-    #[boyia_sync_builtin(native = tensor_zeros_native, method = "zeros")]
+    #[boyia_sync_builtin(method = "zeros")]
     fn tensor_zeros(
         shape: Vec<usize>,
         #[optional(default = "float32")]
@@ -463,7 +463,7 @@ impl TensorBuiltins {
             .unwrap_or(TENSOR_HANDLE_INVALID)
     }
 
-    #[boyia_sync_builtin(native = tensor_ones_native, method = "ones")]
+    #[boyia_sync_builtin(method = "ones")]
     fn tensor_ones(
         shape: Vec<usize>,
         #[optional(default = "float32")]
@@ -477,7 +477,7 @@ impl TensorBuiltins {
             .unwrap_or(TENSOR_HANDLE_INVALID)
     }
 
-    #[boyia_sync_builtin(native = tensor_full_native, method = "full")]
+    #[boyia_sync_builtin(method = "full")]
     fn tensor_full(
         shape: Vec<usize>,
         fill_value: f64,
@@ -493,7 +493,7 @@ impl TensorBuiltins {
     }
 
     /// `torch.tensor(data)` — `data` is `Vec<NestedVec>` (`[1,2,3]` or `[[1,2],[3,4]]`).
-    #[boyia_sync_builtin(native = tensor_tensor_native, method = "tensor")]
+    #[boyia_sync_builtin(method = "tensor")]
     fn tensor_tensor(
         data: Vec<NestedVec>,
         #[optional(default = "float32")]
@@ -507,7 +507,7 @@ impl TensorBuiltins {
             .unwrap_or(TENSOR_HANDLE_INVALID)
     }
 
-    #[boyia_sync_builtin(native = tensor_arange_native, method = "arange")]
+    #[boyia_sync_builtin(method = "arange")]
     fn tensor_arange(
         end: i64,
         #[optional(default = "float32")]
@@ -521,7 +521,7 @@ impl TensorBuiltins {
             .unwrap_or(TENSOR_HANDLE_INVALID)
     }
 
-    #[boyia_sync_builtin(native = tensor_arange_start_end_native, method = "arangeStartEnd")]
+    #[boyia_sync_builtin(method = "arangeStartEnd")]
     fn tensor_arange_start_end(
         start: i64,
         end: i64,
@@ -536,7 +536,7 @@ impl TensorBuiltins {
             .unwrap_or(TENSOR_HANDLE_INVALID)
     }
 
-    #[boyia_sync_builtin(native = tensor_arange_start_end_step_native, method = "arangeStartEndStep")]
+    #[boyia_sync_builtin(method = "arangeStartEndStep")]
     fn tensor_arange_start_end_step(
         start: i64,
         end: i64,
@@ -552,7 +552,7 @@ impl TensorBuiltins {
             .unwrap_or(TENSOR_HANDLE_INVALID)
     }
 
-    #[boyia_sync_builtin(native = tensor_randn_native, method = "randn")]
+    #[boyia_sync_builtin(method = "randn")]
     fn tensor_randn(
         shape: Vec<usize>,
         #[optional(default = "float32")]
@@ -566,14 +566,14 @@ impl TensorBuiltins {
             .unwrap_or(TENSOR_HANDLE_INVALID)
     }
 
-    #[boyia_sync_builtin(native = tensor_shape_native, method = "shape")]
+    #[boyia_sync_builtin(method = "shape")]
     fn tensor_shape(id: i64) -> Option<Vec<usize>> {
         let id = parse_handle(id)?;
         let reg = registry().lock().ok()?;
         reg.get(id).map(|t| t.shape.clone())
     }
 
-    #[boyia_sync_builtin(native = tensor_to_string_native, method = "toString")]
+    #[boyia_sync_builtin(method = "toString")]
     fn tensor_to_string(id: i64) -> String {
         let Some(id) = parse_handle(id) else {
             return String::new();
@@ -586,7 +586,7 @@ impl TensorBuiltins {
             .unwrap_or_default()
     }
 
-    #[boyia_sync_builtin(native = tensor_destroy_native, method = "destroy")]
+    #[boyia_sync_builtin(method = "destroy")]
     fn tensor_destroy(id: i64) -> bool {
         parse_handle(id)
             .map(destroy_tensor)

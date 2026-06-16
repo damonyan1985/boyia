@@ -34,7 +34,7 @@ struct FileBuiltins;
 
 #[boyia_class(name = "File", registrar = builtin_file_class)]
 impl FileBuiltins {
-    #[boyia_async_builtin(native = file_read_native, method = "read")]
+    #[boyia_async_builtin(method = "read")]
     fn file_read(path: String) -> AsyncBuiltinResult {
         match fs::read_to_string(&path) {
             Ok(text) => AsyncBuiltinResult::Ok {
@@ -46,7 +46,7 @@ impl FileBuiltins {
         }
     }
 
-    #[boyia_async_builtin(native = file_write_native, method = "write")]
+    #[boyia_async_builtin(method = "write")]
     fn file_write(path: String, content: String) -> AsyncBuiltinResult {
         match fs::write(&path, content.as_bytes()) {
             Ok(()) => AsyncBuiltinResult::Ok { data: None },
@@ -56,7 +56,7 @@ impl FileBuiltins {
         }
     }
 
-    #[boyia_async_builtin(native = file_create_dirs_native, method = "createDirs")]
+    #[boyia_async_builtin(method = "createDirs")]
     fn file_create_dirs(path: String) -> AsyncBuiltinResult {
         match fs::create_dir_all(&path) {
             Ok(()) => AsyncBuiltinResult::Ok { data: None },
@@ -66,7 +66,7 @@ impl FileBuiltins {
         }
     }
 
-    #[boyia_async_builtin(native = file_create_native, method = "create")]
+    #[boyia_async_builtin(method = "create")]
     fn file_create(path: String) -> AsyncBuiltinResult {
         match File::create(&path) {
             Ok(_f) => AsyncBuiltinResult::Ok { data: None },
@@ -76,7 +76,7 @@ impl FileBuiltins {
         }
     }
 
-    #[boyia_async_builtin(native = file_delete_native, method = "delete")]
+    #[boyia_async_builtin(method = "delete")]
     fn file_delete(path: String) -> AsyncBuiltinResult {
         match fs::remove_file(&path) {
             Ok(()) => AsyncBuiltinResult::Ok { data: None },
@@ -86,12 +86,12 @@ impl FileBuiltins {
         }
     }
 
-    #[boyia_async_builtin(native = file_exists_native, method = "exists")]
+    #[boyia_async_builtin(method = "exists")]
     fn file_exists(path: String) -> AsyncBuiltinResult {
         path_exists_result(&path)
     }
 
-    #[boyia_sync_builtin(native = file_is_absolute_native, method = "isAbsolute")]
+    #[boyia_sync_builtin(method = "isAbsolute")]
     fn file_is_absolute(path: String) -> bool {
         std::path::Path::new(&path).is_absolute()
     }

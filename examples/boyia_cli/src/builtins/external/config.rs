@@ -14,22 +14,22 @@ pub struct ConfigBuiltins {
 
 #[boyia_class(name = "Config", registrar = builtin_config_class, native)]
 impl ConfigBuiltins {
-    #[boyia_sync_builtin(native = config_get_debug_native, method = "getDebug")]
+    #[boyia_sync_builtin(method = "getDebug")]
     fn get_debug(&self) -> bool {
         self.debug
     }
 
-    #[boyia_sync_builtin(native = config_set_debug_native, method = "setDebug")]
+    #[boyia_sync_builtin(method = "setDebug")]
     fn set_debug(&mut self, value: bool) {
         self.debug = value;
     }
 
-    #[boyia_sync_builtin(native = config_get_timeout_native, method = "getTimeout")]
+    #[boyia_sync_builtin(method = "getTimeout")]
     fn get_timeout(&self) -> u64 {
         self.timeout_ms * 2
     }
 
-    #[boyia_sync_builtin(native = config_set_timeout_native, method = "setTimeout")]
+    #[boyia_sync_builtin(method = "setTimeout")]
     fn set_timeout(&mut self, ms: u64) {
         self.timeout_ms = ms;
     }

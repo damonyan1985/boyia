@@ -199,7 +199,7 @@ struct ZipBuiltins;
 
 #[boyia_class(name = "Zip", registrar = builtin_zip_class)]
 impl ZipBuiltins {
-    #[boyia_async_builtin(native = zip_compress_native, method = "compress")]
+    #[boyia_async_builtin(method = "compress")]
     fn zip_compress(
         src: String,
         dest: String,
@@ -209,7 +209,7 @@ impl ZipBuiltins {
         run_compress(PathBuf::from(src), PathBuf::from(dest), password)
     }
 
-    #[boyia_async_builtin(native = zip_extract_native, method = "extract")]
+    #[boyia_async_builtin(method = "extract")]
     fn zip_extract(
         src: String,
         dest: String,

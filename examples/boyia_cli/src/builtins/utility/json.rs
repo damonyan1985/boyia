@@ -10,17 +10,17 @@ struct JsonBuiltins;
 
 #[boyia_class(name = "Json", registrar = builtin_json_class)]
 impl JsonBuiltins {
-    #[boyia_sync_builtin(native = json_parse_native, method = "parse")]
+    #[boyia_sync_builtin(method = "parse")]
     fn json_parse(text: String) -> Option<JsonValue> {
         serde_json::from_str(&text).ok()
     }
 
-    #[boyia_sync_builtin(native = json_to_string_native, method = "toString")]
+    #[boyia_sync_builtin(method = "toString")]
     fn json_to_string(value: JsonValue) -> String {
         serde_json::to_string(&value).unwrap_or_default()
     }
 
-    #[boyia_async_builtin(native = json_async_parse_native, method = "asyncParse")]
+    #[boyia_async_builtin(method = "asyncParse")]
     fn async_parse(text: String) -> AsyncBuiltinResult {
         match serde_json::from_str::<JsonValue>(&text) {
             Ok(value) => AsyncBuiltinResult::OkJson(value),
@@ -30,7 +30,7 @@ impl JsonBuiltins {
         }
     }
 
-    #[boyia_async_builtin(native = json_async_to_string_native, method = "asyncToString")]
+    #[boyia_async_builtin(method = "asyncToString")]
     fn async_to_string(value: JsonValue) -> AsyncBuiltinResult {
         match serde_json::to_string(&value) {
             Ok(text) => AsyncBuiltinResult::Ok {

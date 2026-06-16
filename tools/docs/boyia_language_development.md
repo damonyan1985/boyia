@@ -156,7 +156,7 @@ struct FileBuiltins;
 
 #[boyia_class(name = "File", registrar = builtin_file_class)]
 impl FileBuiltins {
-    #[boyia_async_builtin(native = file_read_native, method = "read")]
+    #[boyia_async_builtin(method = "read")]
     fn file_read(path: String) -> AsyncBuiltinResult {
         match std::fs::read_to_string(&path) {
             Ok(text) => AsyncBuiltinResult::Ok { data: Some(text) },
@@ -166,7 +166,7 @@ impl FileBuiltins {
         }
     }
 
-    #[boyia_sync_builtin(native = file_is_absolute_native, method = "isAbsolute")]
+    #[boyia_sync_builtin(method = "isAbsolute")]
     fn file_is_absolute(path: String) -> bool {
         std::path::Path::new(&path).is_absolute()
     }
@@ -176,8 +176,8 @@ impl FileBuiltins {
 属性说明：
 
 - `#[boyia_class(name = "ClassName", registrar = builtin_xxx_class)]`：挂在 `impl` 上，生成全局类注册函数。
-- `#[boyia_async_builtin(native = ..., method = "...")]`：异步方法，最后一个脚本参数为 callback。
-- `#[boyia_sync_builtin(native = ..., method = "...")]`：同步方法，直接在 VM 线程执行并写回结果。
+- `#[boyia_async_builtin(method = "...")]`：异步方法，最后一个脚本参数为 callback。VM native 符号默认为 `{Rust 方法名}_native`（可用 `native = ...` 覆盖）。
+- `#[boyia_sync_builtin(method = "...")]`：同步方法，直接在 VM 线程执行并写回结果。native 符号规则同上。
 - `#[optional(default = "...")]`：可选参数，**目前仅支持 `String` 类型**（如 Tensor 的 `dtype` 默认 `"float32"`）。省略时由宏注入默认值，且不占用 VM 参数槽位。
 
 约束：
@@ -371,7 +371,7 @@ pub struct ConfigBuiltins {
 
 #[boyia_class(name = "Config", registrar = builtin_config_class, native)]
 impl ConfigBuiltins {
-    #[boyia_sync_builtin(native = config_set_timeout_native, method = "setTimeout")]
+    #[boyia_sync_builtin(method = "setTimeout")]
     fn set_timeout(&mut self, ms: u64) {
         self.timeout_ms = ms;
     }

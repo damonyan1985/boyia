@@ -25,22 +25,22 @@ pub struct ConfigBuiltins {
 
 #[boyia_class(name = "Config", registrar = builtin_config_class, native)]
 impl ConfigBuiltins {
-    #[boyia_sync_builtin(native = config_get_debug_native, method = "getDebug")]
+    #[boyia_sync_builtin(method = "getDebug")]
     fn get_debug(&self) -> bool {
         self.debug
     }
 
-    #[boyia_sync_builtin(native = config_set_debug_native, method = "setDebug")]
+    #[boyia_sync_builtin(method = "setDebug")]
     fn set_debug(&mut self, value: bool) {
         self.debug = value;
     }
 
-    #[boyia_sync_builtin(native = config_get_timeout_native, method = "getTimeout")]
+    #[boyia_sync_builtin(method = "getTimeout")]
     fn get_timeout(&self) -> u64 {
         self.timeout_ms * 2
     }
 
-    #[boyia_sync_builtin(native = config_set_timeout_native, method = "setTimeout")]
+    #[boyia_sync_builtin(method = "setTimeout")]
     fn set_timeout(&mut self, ms: u64) {
         self.timeout_ms = ms;
     }
@@ -54,7 +54,7 @@ impl ConfigBuiltins {
 | `#[boyia_native_object]` | `struct ConfigBuiltins` | 注入 `__boyia_hdr`、实现 `NativePropTrait`，生成 `boyia_default()` |
 | `#[boyia_field_default = "..."]` | 字段上 | `Box` 首次分配时的字段初值 |
 | `#[boyia_class(name = "Config", registrar = ..., native)]` | `impl` 上 | 注册 Boyia 类与方法；`native` 挂 `nativePtr` 槽并在 handler 里走 `boyia_native_ref` / `boyia_native_mut` |
-| `#[boyia_sync_builtin(...)]` | 方法上 | 把 Rust 方法映射为脚本可调用的同步 native 方法 |
+| `#[boyia_sync_builtin(method = "...")]` | 方法上 | 把 Rust 方法映射为脚本可调用的同步 native 方法；native 符号默认 `{方法名}_native` |
 
 ### 1.1 `#[boyia_field_default]` 支持的字段类型
 
@@ -265,7 +265,7 @@ impl boyia_gc::NativePropTrait for ConfigBuiltins {
 ```rust
 #[boyia_class(name = "Config", registrar = builtin_config_class, native)]
 impl ConfigBuiltins {
-    #[boyia_sync_builtin(native = config_set_timeout_native, method = "setTimeout")]
+    #[boyia_sync_builtin(method = "setTimeout")]
     fn set_timeout(&mut self, ms: u64) {
         self.timeout_ms = ms;
     }
@@ -277,7 +277,7 @@ impl ConfigBuiltins {
 
 1. 识别 `&self` / `&mut self` / 无 self（带 `self` 时必须配合 `native`）
 2. 保留方法体，重新输出到 `impl ConfigBuiltins { ... }`
-3. 生成 `{方法名}_handler` + `define_sync_native!`
+3. 生成 `{方法名}_handler` 与 `{方法名}_native`（`define_sync_native!`）
 4. 生成 `builtin_config_class` 注册函数
 
 **以 `set_timeout` 为例，展开出：**
