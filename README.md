@@ -18,16 +18,40 @@ cd boyia
 
 ## 快速运行 boyia_cli
 
-`boyia_cli` 是官方示例运行器：启动 VM、注册 CLI 内置类、编译并执行 `examples/boyia_cli/script/main.boyia`。
+`boyia_cli` 是官方示例运行器：启动 VM、注册 CLI 内置类、编译并执行 Boyia 脚本。
 
 ```bash
-# 在项目根目录
-cargo run -p boyia_cli
+# 在 examples/boyia_cli 目录（推荐）
+cd examples/boyia_cli
+cargo run
+
+# 指定脚本路径（文件存在时优先使用）
+cargo run -- script/ai.boyia
+
+# 命令行路径不存在时，回退到 .boyia_rc
+cargo run -- missing.boyia
+
+# 无参数：从 .boyia_rc 读取入口脚本
+cargo run
 ```
 
-Windows PowerShell 同样适用。首次编译会稍慢，之后会快很多。
+**脚本解析顺序：**
 
-成功时终端会先打印初始化日志，再输出脚本里 `Util.log` / `BY_Log` 的内容，最后出现 `Done.`。
+1. 命令行传入的路径（且文件存在）
+2. 否则按顺序查找 `.boyia_rc`：
+   - 工程根目录（从 cwd 向上，含 `Cargo.toml` 或 `.git` 的目录）
+   - 可执行文件同级目录
+   - 用户主目录（如 `/Users/<you>/.boyia_rc`）
+
+`.boyia_rc` 示例（`examples/boyia_cli/.boyia_rc`）：
+
+```ini
+script=script/main.boyia
+```
+
+相对路径相对于 `.boyia_rc` 所在目录。详见 `examples/boyia_cli/src/cli.rs`。
+
+成功时终端会打印 `Boyia CLI: <脚本绝对路径>`，随后输出脚本日志。
 
 ### 调试选项
 
@@ -43,7 +67,7 @@ $env:BOYIA_INIT_MINIMAL="1"; cargo run -p boyia_cli
 
 ## 新人上手：编写第一个 Demo
 
-当前 CLI **固定执行** `examples/boyia_cli/script/main.boyia`。上手最快的方式是直接改这个文件（或先备份一份再改）。
+默认入口由 `examples/boyia_cli/.boyia_rc` 配置为 `script/main.boyia`。也可通过命令行指定其它脚本。
 
 ### 1. 最小 Hello World
 
@@ -65,7 +89,8 @@ app.run();
 然后运行：
 
 ```bash
-cargo run -p boyia_cli
+cd examples/boyia_cli
+cargo run
 ```
 
 应看到类似 `< Hello, Boyia! >` 的日志。
@@ -130,6 +155,9 @@ require("./util/util.boyia");
 | `Https` | 异步 HTTP | `load`, `request` |
 | `Zip` | 异步压缩/解压 | `compress`, `extract` |
 | `Json` | JSON 同步 + 异步 | `parse`, `toString`, `asyncParse`, `asyncToString` |
+| `OS` | 进程环境 | `cwd`, `chdir`, `name`, `cpuCount` |
+| `Tensor` | CPU 张量（AI 示例） | `empty`, `zeros`, `ones`, `randn`, `id` … |
+| `Config` | 带 Rust 堆状态的示例类 | `getDebug`, `setDebug`, `getTimeout`, `setTimeout` |
 
 Runtime 启动时还会自动注册：`String`、`Map`、`Array`、`MicroTask`（见 `crates/boyia_builtins`）。
 
@@ -145,16 +173,18 @@ boyia/
 │   └── ...
 ├── examples/
 │   ├── boyia_cli/       # ★ 推荐入口：运行脚本 + CLI 内置类
+│   │   ├── .boyia_rc          # 默认入口脚本配置
 │   │   ├── script/main.boyia
-│   │   └── src/builtins/utility/   # File/Https/Zip/Json 的 Rust 实现
+│   │   └── src/builtins/      # utility/（File、OS…）、external/（Config）
 │   └── boyia_lsp/       # .boyia 语言的 LSP 服务（可选）
 └── tools/docs/
-    └── boyia_language_development.md   # 语法与扩展开发文档
+    ├── boyia_language_development.md   # 语法与扩展开发文档
+    └── builtin_struct_fields_mapping.md  # native 对象（#[boyia_native_object]）详解
 ```
 
 ## 用 Rust 扩展 Boyia
 
-- **CLI 内置类**：在 `examples/boyia_cli/src/builtins/utility/` 用 `#[boyia_class]`、`#[boyia_async_builtin]`、`#[boyia_sync_builtin]` 声明，并加入 `builtins/mod.rs` 的 `DEFAULT_BUILTINS`。
+- **CLI 内置类**：在 `examples/boyia_cli/src/builtins/` 用 `#[boyia_class]`、`#[boyia_async_builtin]`、`#[boyia_sync_builtin]` 声明；带实例状态时在 struct 上加 `#[boyia_native_object]`（无需 `#[boyia_class(..., native)]`），并加入 `builtins/mod.rs` 的 `DEFAULT_BUILTINS`。
 - **通用 native 函数**：参考 `crates/boyia_lib`，在 runtime 中注册到 native 表。
 - **JSON 转换辅助**：`examples/boyia_cli/src/runner/macro/builtin_json.rs`。
 
@@ -175,7 +205,8 @@ cargo run -p boyia_lsp
 
 ## 文档
 
-- [Boyia 语言开发文档](tools/docs/boyia_language_development.md) — 语法、`class`/`prop`/`async`、Builtins 编写、`Json` 与 `async/await` 示例
+- [Boyia 语言开发文档](tools/docs/boyia_language_development.md) — 语法、`class`/`prop`/`async`、CLI 运行方式、Builtins 编写、`Json` 与 `async/await` 示例
+- [Builtin Native 对象映射](tools/docs/builtin_struct_fields_mapping.md) — `#[boyia_native_object]`、`nativePtr` 与带实例状态的 builtin 类
 
 ## Features
 

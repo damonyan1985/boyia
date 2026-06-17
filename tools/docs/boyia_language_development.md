@@ -124,14 +124,14 @@ Boyia 的 builtin 分为两层：
 | 层级 | Crate / 目录 | 全局类 | 注册时机 |
 |------|----------------|--------|----------|
 | 运行时核心 | `crates/boyia_builtins` | `String`、`Map`、`Array`、`MicroTask` | `boyia_runtime` 初始化时自动注册 |
-| CLI 扩展 | `examples/boyia_cli/src/builtins` | `File`、`Https`、`Zip`、`Json`、`Tensor`、`Config` 等 | CLI 启动时通过 `DEFAULT_BUILTINS` 注册 |
+| CLI 扩展 | `examples/boyia_cli/src/builtins` | `File`、`Https`、`Zip`、`Json`、`OS`、`Tensor`、`Config` 等 | CLI 启动时通过 `DEFAULT_BUILTINS` 注册 |
 
 CLI 侧目录与入口：
 
 | 路径 | 职责 |
 |------|------|
-| `builtins/utility/` | `File`、`Https`、`Zip`、`Json` |
-| `builtins/external/` | 带 Rust 字段映射的扩展类（如 `Config`） |
+| `builtins/utility/` | `File`、`Https`、`Zip`、`Json`、`OS` |
+| `builtins/external/` | 带 `nativePtr` 堆状态的扩展类（如 `Config`，见 6.7） |
 | `builtins/ai/tensor.rs` | `Tensor` 工厂与句柄管理 |
 | `builtins/mod.rs` | `DEFAULT_BUILTINS` 注册表 |
 | `runner/async.rs`、`runner/sync.rs` | 异步 / 同步 native 基础设施 |
@@ -140,6 +140,25 @@ CLI 侧目录与入口：
 | `runner/macro/builtin_vec.rs` | Boyia Array ↔ `Vec<usize>` / 嵌套 `NestedVec` |
 
 > **说明**：`Json` 已从 `boyia_builtins` 迁出，同步与异步 JSON 能力统一由 CLI 的 `Json` 类提供；仅使用 `boyia_runtime` 而不注册 CLI builtins 时，不会有 `Json` / `Tensor` 等 CLI 类。
+
+### 6.0 运行 boyia_cli
+
+`examples/boyia_cli` 提供通用命令行入口（`src/main.rs`、`src/cli.rs`）：
+
+```bash
+cd examples/boyia_cli
+cargo run                          # 读 .boyia_rc
+cargo run -- script/ai.boyia       # 指定脚本（存在则优先）
+cargo run -- --help
+```
+
+**入口脚本解析：**
+
+1. 命令行路径（文件须存在；不存在则回退 `.boyia_rc`）
+2. `.boyia_rc` 查找顺序：工程根 → 可执行文件目录 → 用户主目录
+3. `.boyia_rc` 内容：`script=path/to/entry.boyia`（也支持 `entry=`、`main=`）
+
+`File.*` 等使用相对路径的 builtin 以**进程 cwd** 为准；可用 `OS.cwd()` / `OS.chdir(path)` 调整工作目录。
 
 ### 6.1 推荐写法：`#[boyia_class]` 宏
 
@@ -183,8 +202,8 @@ impl FileBuiltins {
 约束：
 
 - `impl` 内只能是带上述属性的关联函数。
-- 默认情况下方法**不带 `self`**（如 `File`、`Json`）。
-- 若需将 Rust struct **字段**映射为 Boyia 对象属性，并在方法里用 `&self` / `&mut self` 读写，见 **[6.6 Rust struct 字段映射](#66-rust-struct-字段映射config)**。
+- 默认情况下方法**不带 `self`**（如 `File`、`Json`、`OS`）。
+- 若需在 **sync** 方法里用 `&self` / `&mut self` 读写 Rust 堆上状态，在 struct 上加 `#[boyia_native_object]`，见 **[6.7 Rust native 对象（Config）](#67-rust-native-对象config)**。
 - 异步 work 函数返回 `AsyncBuiltinResult`（见 6.2）。
 - 同步 work 函数常见返回类型见下表。
 
@@ -216,6 +235,7 @@ pub const DEFAULT_BUILTINS: &[BuiltinRegistrar] = &[
     external::config::builtin_config_class,
     utility::https::builtin_https_class,
     utility::file::builtin_file_class,
+    utility::os::builtin_os_class,
     utility::zip::builtin_zip_class,
     utility::json::builtin_json_class,
     ai::tensor::builtin_tensor_class,
@@ -313,7 +333,25 @@ Json.asyncToString(boyiaValue, resolve); // 成功时 data 为 JSON 字符串
 
 完整示例见 `examples/boyia_cli/script/main.boyia` 中的 `jsonRead` / `jsonAsyncParse` / `jsonAsyncToString`。
 
-### 6.5 Tensor 内置类（CLI / AI）
+### 6.5 OS 内置类
+
+`OS` 提供进程级环境查询与 cwd 控制（`builtins/utility/os.rs`）。`File.*` 等使用相对路径的 builtin 以**进程当前工作目录**解析路径。
+
+| 方法 | 返回 | 说明 |
+|------|------|------|
+| `OS.cwd()` | `String` | 当前工作目录 |
+| `OS.chdir(path)` | `bool` | 切换 cwd，成功为 `true` |
+| `OS.name()` | `String` | 平台名（如 `linux`、`macos`、`windows`） |
+| `OS.cpuCount()` | 数字 | 可用并行度（逻辑 CPU 数） |
+
+```boyia
+BY_Log(OS.cwd());
+OS.chdir("/tmp");
+BY_Log(OS.name());
+BY_Log(OS.cpuCount());
+```
+
+### 6.6 Tensor 内置类（CLI / AI）
 
 `Tensor` 提供类似 PyTorch 的 CPU 张量工厂，数据通过 **句柄（Handle）** 管理，脚本不直接持有 Rust 对象。
 
@@ -352,9 +390,11 @@ Tensor.destroy(id);
 
 Rust 侧 `.map(store_tensor)` 是标准库 **`Option::map`**：仅当 `BoyiaTensor::from_nested` 返回 `Some` 时才写入 registry，不是张量的逐元素 `map` 运算。
 
-### 6.6 Rust native 对象（Config）
+### 6.7 Rust native 对象（Config）
 
 除 **6.1** 的「仅方法、无 `self`」写法外，CLI 还支持把 Rust struct 状态放在 **`Box<T>` + `nativePtr`** 上，并在 **sync** 方法中通过 `&self` / `&mut self` 读写（如 `Config` 的 `debug`、`timeout_ms`）。
+
+**不再需要** `#[boyia_class(..., native)]`：`impl` 里只要有带 `self` 的 sync 方法，宏会要求 struct 已实现 `NativePropTrait`（由 `#[boyia_native_object]` 提供），并自动挂 `nativePtr`。
 
 典型写法（源码见 `builtins/external/config.rs`）：
 
@@ -369,7 +409,7 @@ pub struct ConfigBuiltins {
     timeout_ms: u64,
 }
 
-#[boyia_class(name = "Config", registrar = builtin_config_class]
+#[boyia_class(name = "Config", registrar = builtin_config_class)]
 impl ConfigBuiltins {
     #[boyia_sync_builtin(method = "setTimeout")]
     fn set_timeout(&mut self, ms: u64) {
@@ -390,11 +430,11 @@ Util.log("timeout: " + config.getTimeout());
 
 **[Builtin Native 对象映射](./builtin_struct_fields_mapping.md)**
 
-当前限制摘要：`native` 模式字段类型为标量（`bool`、整数、浮点、`String`）；带 `self` 的方法仅 **sync**；持久状态在 Rust `Box` 内，通过 `nativePtr` 关联实例；脚本只能通过方法访问，不能直接读写字段属性。
+当前限制摘要：字段类型为标量（`bool`、整数、浮点、`String`）；带 `self` 的方法仅 **sync**；持久状态在 Rust `Box` 内，通过 `nativePtr` 关联实例；脚本只能通过方法访问，不能直接读写字段属性；`#[boyia_class]` 不再接受 `native` 参数（由 `#[boyia_native_object]` 自动推断）。
 
-### 6.7 底层手写 native（可选）
+### 6.8 底层手写 native（可选）
 
-若不使用宏，仍可参照 `boyia_builtins` 或 `boyia_lib`：`create_global_class` + `gen_builtin_class_function`，在 native 中手动读 local、写结果。CLI 的 File / Https / Zip / Json / Tensor 已统一改为宏写法，新扩展建议沿用 **6.1**。
+若不使用宏，仍可参照 `boyia_builtins` 或 `boyia_lib`：`create_global_class` + `gen_builtin_class_function`，在 native 中手动读 local、写结果。CLI 的 File / Https / Zip / Json / OS / Tensor 已统一改为宏写法，新扩展建议沿用 **6.1**。
 
 手写异步 native 的骨架示意：
 

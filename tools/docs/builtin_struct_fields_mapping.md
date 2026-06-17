@@ -23,7 +23,7 @@ pub struct ConfigBuiltins {
     timeout_ms: u64,
 }
 
-#[boyia_class(name = "Config", registrar = builtin_config_class]
+#[boyia_class(name = "Config", registrar = builtin_config_class)]
 impl ConfigBuiltins {
     #[boyia_sync_builtin(method = "getDebug")]
     fn get_debug(&self) -> bool {
@@ -53,7 +53,7 @@ impl ConfigBuiltins {
 |----|--------|------|
 | `#[boyia_native_object]` | `struct ConfigBuiltins` | 注入 `__boyia_hdr`、实现 `NativePropTrait`，生成 `boyia_default()` |
 | `#[boyia_field_default = "..."]` | 字段上 | `Box` 首次分配时的字段初值 |
-| `#[boyia_class(name = "Config", registrar = ...]` | `impl` 上 | 注册 Boyia 类与方法；有 `self` 方法时自动挂 `nativePtr` 并在 handler 里走 `boyia_native_ref` / `boyia_native_mut` |
+| `#[boyia_class(name = "Config", registrar = ...)]` | `impl` 上 | 注册 Boyia 类与方法；**若存在带 `self` 的 sync 方法**，宏要求 struct 已实现 `NativePropTrait`（即已加 `#[boyia_native_object]`），并自动挂 `nativePtr`、走 `boyia_native_ref` / `boyia_native_mut` |
 | `#[boyia_sync_builtin(method = "...")]` | 方法上 | 把 Rust 方法映射为脚本可调用的同步 native 方法；native 符号默认 `{方法名}_native` |
 
 ### 1.1 `#[boyia_field_default]` 支持的字段类型
@@ -70,6 +70,17 @@ impl ConfigBuiltins {
 | `u8` / `u16` / `u32` | `#[boyia_field_default = "255"]` | `0` | 按有符号解析后转型 |
 
 未列出的类型（如 `Option<T>`、`Vec<T>`、自定义 struct）暂不支持，编译期会报错。
+
+### 1.2 `#[boyia_class]` 与 `#[boyia_native_object]` 如何配合
+
+**不再需要**在 `#[boyia_class]` 上写 `native` 标志（已移除；写上会编译报错）。
+
+| 场景 | struct | impl 方法 | 宏行为 |
+|------|--------|-----------|--------|
+| 纯静态 API（`File`、`Json`、`OS`） | 空 struct 或普通 struct | 无 `self` | 只注册方法，不挂 `nativePtr` |
+| 带实例状态（`Config`） | `#[boyia_native_object]` | `&self` / `&mut self` | 编译期检查 `NativePropTrait`；注册时 `attach_native_ptr_slot`；handler 用 `boyia_native_ref` / `mut` |
+
+规则：**只要 sync 方法带 `self`，就必须在对应 struct 上使用 `#[boyia_native_object]`**；二者缺一会在编译期失败。
 
 ---
 
@@ -263,7 +274,7 @@ impl boyia_gc::NativePropTrait for ConfigBuiltins {
 **输入**（你写的 impl）：
 
 ```rust
-#[boyia_class(name = "Config", registrar = builtin_config_class]
+#[boyia_class(name = "Config", registrar = builtin_config_class)]
 impl ConfigBuiltins {
     #[boyia_sync_builtin(method = "setTimeout")]
     fn set_timeout(&mut self, ms: u64) {
@@ -275,10 +286,11 @@ impl ConfigBuiltins {
 
 **宏在编译期对每个 `#[boyia_sync_builtin]` 方法：**
 
-1. 识别 `&self` / `&mut self` / 无 self（带 `self` 时必须配合 `native`）
-2. 保留方法体，重新输出到 `impl ConfigBuiltins { ... }`
-3. 生成 `{方法名}_handler` 与 `{方法名}_native`（`define_sync_native!`）
-4. 生成 `builtin_config_class` 注册函数
+1. 识别 `&self` / `&mut self` / 无 self
+2. 若存在任意带 `self` 的方法：生成 `NativePropTrait` 编译期断言，并在 registrar 里通过 trait 约束调用 `attach_native_ptr_slot`
+3. 保留方法体，重新输出到 `impl ConfigBuiltins { ... }`
+4. 生成 `{方法名}_handler` 与 `{方法名}_native`（`define_sync_native!`，符号默认为 `{Rust 方法名}_native`）
+5. 生成 `builtin_config_class` 注册函数
 
 **以 `set_timeout` 为例，展开出：**
 
@@ -320,7 +332,7 @@ pub fn builtin_config_class(
     gen_id: &mut dyn FnMut(&str) -> LUintPtr,
 ) {
     register_async_builtin_class(vm, gen_id, "Config", |class_body, vm, gen_id| {
-        unsafe { boyia_gc::attach_native_ptr_slot(class_body, gen_id); }
+        __boyia_attach_native_ptr::<ConfigBuiltins>(class_body, gen_id);
         attach_method(gen_id, "getDebug",    config_get_debug_native,    class_body, vm);
         attach_method(gen_id, "setDebug",    config_set_debug_native,    class_body, vm);
         attach_method(gen_id, "getTimeout",  config_get_timeout_native,  class_body, vm);
