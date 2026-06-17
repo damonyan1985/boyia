@@ -14,23 +14,20 @@ use syn::{
 struct ClassConfig {
     name: LitStr,
     registrar: syn::Ident,
-    native: bool,
 }
 
 impl Parse for ClassConfig {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let mut name = None;
         let mut registrar = None;
-        let mut native = false;
 
         while !input.is_empty() {
             let key: syn::Ident = input.parse()?;
             if key == "native" {
-                native = true;
-                if input.peek(Comma) {
-                    input.parse::<Comma>()?;
-                }
-                continue;
+                return Err(syn::Error::new(
+                    key.span(),
+                    "`native` on `#[boyia_class]` is removed; use `#[boyia_native_object]` on the struct when methods take `self`",
+                ));
             }
             input.parse::<syn::Token![=]>()?;
             match key.to_string().as_str() {
@@ -39,9 +36,7 @@ impl Parse for ClassConfig {
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
-                        format!(
-                            "unknown key `{other}`, expected `name`, `registrar`, or `native`"
-                        ),
+                        format!("unknown key `{other}`, expected `name` or `registrar`"),
                     ));
                 }
             }
@@ -57,7 +52,6 @@ impl Parse for ClassConfig {
             registrar: registrar.ok_or_else(|| {
                 syn::Error::new(Span::call_site(), "missing `registrar = ...` in attribute")
             })?,
-            native,
         })
     }
 }
@@ -695,15 +689,8 @@ fn expand_sync_method(
     config: &SyncMethodConfig,
     func: &ItemFn,
     struct_ty: &Type,
-    has_native: bool,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let (self_arg, args) = collect_args(func)?;
-    if self_arg != SelfArg::None && !has_native {
-        return Err(syn::Error::new_spanned(
-            func,
-            "`self` requires `#[boyia_class(..., native)]` + `#[boyia_native_object]`",
-        ));
-    }
     let mut func = func.clone();
     strip_optional_from_func(&mut func);
 
@@ -728,7 +715,7 @@ fn expand_sync_method(
     let arg_names: Vec<_> = args.iter().map(|a| &a.name).collect();
     let arg_extractions: Vec<_> = args.iter().map(sync_arg_extraction).collect::<Result<_, _>>()?;
 
-    let work_call = if has_native && self_arg != SelfArg::None {
+    let work_call = if self_arg != SelfArg::None {
         match self_arg {
             SelfArg::Ref | SelfArg::Mut => {
                 quote! { #struct_ty::#work_name(state, #( #arg_names, )*) }
@@ -743,7 +730,7 @@ fn expand_sync_method(
         }
     };
 
-    let (state_prelude, state_epilogue) = if has_native && self_arg != SelfArg::None {
+    let (state_prelude, state_epilogue) = if self_arg != SelfArg::None {
         let access = match self_arg {
             SelfArg::Ref => quote! {
                 boyia_gc::boyia_native_ref::<#struct_ty>(class_body, &mut *rt)
@@ -823,7 +810,7 @@ fn expand_class(class_config: &ClassConfig, imp: &ItemImpl) -> syn::Result<proc_
     }
 
     let struct_ty = imp.self_ty.clone();
-    let has_native = class_config.native;
+    let mut needs_native_object = false;
 
     let mut method_expansions = Vec::new();
     let mut impl_methods = Vec::new();
@@ -854,9 +841,11 @@ fn expand_class(class_config: &ClassConfig, imp: &ItemImpl) -> syn::Result<proc_
                 )
             }
             BuiltinKind::Sync(cfg) => {
-                method_expansions.push(expand_sync_method(
-                    cfg, &func, &struct_ty, has_native,
-                )?);
+                let (self_arg, _) = collect_args(&func)?;
+                if self_arg != SelfArg::None {
+                    needs_native_object = true;
+                }
+                method_expansions.push(expand_sync_method(cfg, &func, &struct_ty)?);
                 (
                     &cfg.method,
                     resolve_native_name(work_name, cfg.native.as_ref()),
@@ -882,15 +871,36 @@ fn expand_class(class_config: &ClassConfig, imp: &ItemImpl) -> syn::Result<proc_
     let class_name = &class_config.name;
     let registrar = &class_config.registrar;
 
-    let attach_props = if has_native {
+    let attach_props = if needs_native_object {
         quote! {
-            unsafe { boyia_gc::attach_native_ptr_slot(class_body, gen_id); }
+            fn __boyia_attach_native_ptr<T: boyia_gc::NativePropTrait>(
+                class_body: *mut boyia_vm::BoyiaFunction,
+                gen_id: &mut dyn FnMut(&str) -> boyia_vm::LUintPtr,
+            ) {
+                unsafe { boyia_gc::attach_native_ptr_slot(class_body, gen_id); }
+            }
+            __boyia_attach_native_ptr::<#struct_ty>(class_body, gen_id);
+        }
+    } else {
+        quote! {}
+    };
+
+    let native_object_assert = if needs_native_object {
+        quote! {
+            const _: () = {
+                fn __boyia_assert_native_prop<T: boyia_gc::NativePropTrait>() {}
+                fn __boyia_check_native_prop() {
+                    __boyia_assert_native_prop::<#struct_ty>();
+                }
+            };
         }
     } else {
         quote! {}
     };
 
     Ok(quote! {
+        #native_object_assert
+
         impl #struct_ty {
             #( #impl_methods )*
         }

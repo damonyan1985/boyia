@@ -369,7 +369,7 @@ pub struct ConfigBuiltins {
     timeout_ms: u64,
 }
 
-#[boyia_class(name = "Config", registrar = builtin_config_class, native)]
+#[boyia_class(name = "Config", registrar = builtin_config_class]
 impl ConfigBuiltins {
     #[boyia_sync_builtin(method = "setTimeout")]
     fn set_timeout(&mut self, ms: u64) {
@@ -386,7 +386,7 @@ config.setTimeout(5333);
 Util.log("timeout: " + config.getTimeout());
 ```
 
-**完整说明**（注册流程、`nativePtr` 懒分配、`#[boyia_native_object]` / `#[boyia_class(..., native)]` 宏展开、方法与 GC）见专用文档：
+**完整说明**（注册流程、`nativePtr` 懒分配、`#[boyia_native_object]` / `#[boyia_class(...)]` 宏展开、方法与 GC）见专用文档：
 
 **[Builtin Native 对象映射](./builtin_struct_fields_mapping.md)**
 

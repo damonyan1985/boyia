@@ -10,6 +10,7 @@ pub const DEFAULT_BUILTINS: &[BuiltinRegistrar] = &[
     external::config::builtin_config_class,
     utility::https::builtin_https_class,
     utility::file::builtin_file_class,
+    utility::os::builtin_os_class,
     utility::zip::builtin_zip_class,
     utility::json::builtin_json_class,
     ai::tensor::builtin_tensor_class,

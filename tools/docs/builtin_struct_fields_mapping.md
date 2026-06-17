@@ -1,6 +1,6 @@
 # Builtin Native 对象映射（`#[boyia_native_object]`）
 
-本文以 `examples/boyia_cli/src/builtins/external/config.rs` 中的 **Config** 内置类为例，说明 Rust struct 如何通过 `nativePtr` + `Box<T>` 挂到 Boyia 实例上，以及 `#[boyia_native_object]` / `#[boyia_class(..., native)]` 的完整使用与宏展开流程。
+本文以 `examples/boyia_cli/src/builtins/external/config.rs` 中的 **Config** 内置类为例，说明 Rust struct 如何通过 `nativePtr` + `Box<T>` 挂到 Boyia 实例上，以及 `#[boyia_native_object]` / `#[boyia_class(...)]` 的完整使用与宏展开流程。
 
 相关总览见 [Boyia 语言开发文档](./boyia_language_development.md) 第 6 节。
 
@@ -23,7 +23,7 @@ pub struct ConfigBuiltins {
     timeout_ms: u64,
 }
 
-#[boyia_class(name = "Config", registrar = builtin_config_class, native)]
+#[boyia_class(name = "Config", registrar = builtin_config_class]
 impl ConfigBuiltins {
     #[boyia_sync_builtin(method = "getDebug")]
     fn get_debug(&self) -> bool {
@@ -53,7 +53,7 @@ impl ConfigBuiltins {
 |----|--------|------|
 | `#[boyia_native_object]` | `struct ConfigBuiltins` | 注入 `__boyia_hdr`、实现 `NativePropTrait`，生成 `boyia_default()` |
 | `#[boyia_field_default = "..."]` | 字段上 | `Box` 首次分配时的字段初值 |
-| `#[boyia_class(name = "Config", registrar = ..., native)]` | `impl` 上 | 注册 Boyia 类与方法；`native` 挂 `nativePtr` 槽并在 handler 里走 `boyia_native_ref` / `boyia_native_mut` |
+| `#[boyia_class(name = "Config", registrar = ...]` | `impl` 上 | 注册 Boyia 类与方法；有 `self` 方法时自动挂 `nativePtr` 并在 handler 里走 `boyia_native_ref` / `boyia_native_mut` |
 | `#[boyia_sync_builtin(method = "...")]` | 方法上 | 把 Rust 方法映射为脚本可调用的同步 native 方法；native 符号默认 `{方法名}_native` |
 
 ### 1.1 `#[boyia_field_default]` 支持的字段类型
@@ -258,12 +258,12 @@ impl boyia_gc::NativePropTrait for ConfigBuiltins {
 
 ---
 
-## 6. `#[boyia_class(..., native)]` 宏展开流程
+## 6. `#[boyia_class(...)]` 宏展开流程
 
 **输入**（你写的 impl）：
 
 ```rust
-#[boyia_class(name = "Config", registrar = builtin_config_class, native)]
+#[boyia_class(name = "Config", registrar = builtin_config_class]
 impl ConfigBuiltins {
     #[boyia_sync_builtin(method = "setTimeout")]
     fn set_timeout(&mut self, ms: u64) {

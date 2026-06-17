@@ -12,7 +12,7 @@ pub struct ConfigBuiltins {
     timeout_ms: u64,
 }
 
-#[boyia_class(name = "Config", registrar = builtin_config_class, native)]
+#[boyia_class(name = "Config", registrar = builtin_config_class)]
 impl ConfigBuiltins {
     #[boyia_sync_builtin(method = "getDebug")]
     fn get_debug(&self) -> bool {
