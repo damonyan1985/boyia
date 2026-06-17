@@ -1,0 +1,2 @@
+# Default dev entry when running `cargo run` from this crate (no CLI args).
+script=script/main.boyia

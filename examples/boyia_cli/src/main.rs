@@ -1,17 +1,42 @@
-//! Example: use BoyiaRuntime to compile and run a Boyia program from `script/main.boyia`
-//! (under this crate directory, resolved via `CARGO_MANIFEST_DIR`).
-//! Prints results via `BY_Log` and exercises async/File/Https builtins.
-//!
-//! If the program hangs or crashes, see CRASH_ANALYSIS.md. You can set
-//! env BOYIA_INIT_MINIMAL=1 to skip builtin classes (faster init, fewer deps)
-//! and narrow down whether the crash is in init.
+//! Boyia CLI: compile and run a `.boyia` script from the command line or `.boyia_rc`.
 
 mod builtins;
+mod cli;
 mod runner;
 
+use cli::{parse_args, print_usage, resolve_entry_script};
 use runner::BoyiaRunner;
+
 fn main() {
-    println!("Boyia CLI: compile and run script\n");
+    let mut env_args: Vec<String> = std::env::args().skip(1).collect();
+    let program = std::env::args()
+        .next()
+        .unwrap_or_else(|| "boyia_cli".into());
+
+    let script_arg = match parse_args(std::mem::take(&mut env_args)) {
+        Ok(None) => {
+            print_usage(&program);
+            return;
+        }
+        Ok(Some(path)) if path.is_empty() => None,
+        Ok(Some(path)) => Some(path),
+        Err(err) => {
+            eprintln!("Error: {err}\n");
+            print_usage(&program);
+            std::process::exit(1);
+        }
+    };
+
+    let script_path = match resolve_entry_script(script_arg.as_deref()) {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("Error: {err}\n");
+            print_usage(&program);
+            std::process::exit(1);
+        }
+    };
+
+    println!("Boyia CLI: {}", script_path.display());
 
     let registrars = if std::env::var("BOYIA_INIT_MINIMAL").ok().as_deref() == Some("1") {
         &[][..]
@@ -19,27 +44,20 @@ fn main() {
         builtins::DEFAULT_BUILTINS
     };
 
-    println!("[1] Creating runtime...");
     let runner = BoyiaRunner::create(registrars);
     if !runner.is_ready() {
-        eprintln!("Error: VM init returned null");
-        return;
+        eprintln!("Error: VM init failed");
+        std::process::exit(1);
     }
-    println!("[3] VM ready.");
 
-    let script_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("script")
-        .join("main.boyia");
     let script = std::fs::read_to_string(&script_path).unwrap_or_else(|e| {
-        panic!("failed to read {}: {e}", script_path.display());
+        eprintln!("Error: failed to read {}: {e}", script_path.display());
+        std::process::exit(1);
     });
 
-    println!("[4] Compiling script...");
-    runner
-        .compile(&script, Some(&script_path))
-        .expect("failed to compile script on task thread");
-    println!("[6] Running script...");
+    if let Err(e) = runner.compile(&script, Some(&script_path)) {
+        eprintln!("Error: compile failed: {e:?}");
+        std::process::exit(1);
+    }
 
-    println!("\nDone.");
-    // When main returns, runner is dropped -> Drop stops task thread and joins it -> "BoyiaRunner exit!!!"
 }
