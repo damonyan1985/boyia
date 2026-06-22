@@ -11,8 +11,8 @@ use boyia_vm::{
     BoyiaValue, BuiltinId, Global, K_BOYIA_NULL, NativePtr, OpHandleResult, RealValue, Runtime, ValueType,
     LInt, LInt8, LIntPtr, LUintPtr, BoyiaVM,
 };
-use super::run_loop::RunLoopHandle;
-use super::thread_pool::ThreadPool;
+use crate::runner::run_loop::RunLoopHandle;
+use crate::runner::thread_pool::ThreadPool;
 use std::str;
 use std::sync::Weak;
 
@@ -208,7 +208,7 @@ pub fn register_async_builtin_class<F, R>(
 macro_rules! define_async_native {
     ($native:ident, $min:expr, $handler:ident) => {
         unsafe fn $native(vm: &mut boyia_vm::BoyiaVM) -> boyia_vm::OpHandleResult {
-            $crate::runner::r#async::async_dispatch(vm, $min, $handler)
+            $crate::runner::builtin_async::async_dispatch(vm, $min, $handler)
         }
     };
 }

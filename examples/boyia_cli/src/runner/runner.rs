@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use super::r#async::{AsyncCtx, CliEmbedder};
+use super::builtin_async::{AsyncCtx, CliEmbedder};
 use super::run_loop::RunLoopError;
 use super::task_thread::TaskThread;
 use super::thread_pool::ThreadPool;

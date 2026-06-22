@@ -664,9 +664,9 @@ fn expand_async_method(
 
     Ok(quote! {
         fn #schedule_name(
-            ctx: &crate::runner::r#async::AsyncCtx,
+            ctx: &crate::runner::builtin_async::AsyncCtx,
             #( #arg_names: #arg_types, )*
-            callback: crate::runner::r#async::ScriptCallback,
+            callback: crate::runner::builtin_async::ScriptCallback,
         ) -> bool {
             ctx.spawn(
                 move || #struct_ty::#work_name( #( #arg_names, )* ),
@@ -675,7 +675,7 @@ fn expand_async_method(
             )
         }
 
-        fn #handler_name(site: &mut crate::runner::r#async::CallSite<'_>) -> boyia_vm::OpHandleResult {
+        fn #handler_name(site: &mut crate::runner::builtin_async::CallSite<'_>) -> boyia_vm::OpHandleResult {
             #( #arg_extractions )*
             let callback = crate::some_or_end!(site.callback());
             site.finish(#schedule_name(site.ctx(), #( #arg_names, )* callback))
@@ -777,12 +777,12 @@ fn expand_sync_method(
         quote! {
             let __sync_result = #work_call;
             #state_epilogue
-            crate::runner::sync::set_sync_return(__sync_result, site.vm())
+            crate::runner::builtin_sync::set_sync_return(__sync_result, site.vm())
         }
     };
 
     Ok(quote! {
-        fn #handler_name(site: &mut crate::runner::sync::SyncCallSite<'_>) -> boyia_vm::OpHandleResult {
+        fn #handler_name(site: &mut crate::runner::builtin_sync::SyncCallSite<'_>) -> boyia_vm::OpHandleResult {
             #state_prelude
             #( #arg_extractions )*
             #finish
@@ -857,7 +857,7 @@ fn expand_class(class_config: &ClassConfig, imp: &ItemImpl) -> syn::Result<proc_
         impl_methods.push(quote! { #func });
 
         attach_calls.push(quote! {
-            crate::runner::r#async::attach_method(gen_id, #method_lit, #native_name, class_body, vm);
+            crate::runner::builtin_async::attach_method(gen_id, #method_lit, #native_name, class_body, vm);
         });
     }
 
@@ -911,7 +911,7 @@ fn expand_class(class_config: &ClassConfig, imp: &ItemImpl) -> syn::Result<proc_
             vm: &mut boyia_vm::BoyiaVM,
             gen_id: &mut dyn FnMut(&str) -> boyia_vm::LUintPtr,
         ) {
-            crate::runner::r#async::register_async_builtin_class(vm, gen_id, #class_name, |class_body, vm, gen_id| {
+            crate::runner::builtin_async::register_async_builtin_class(vm, gen_id, #class_name, |class_body, vm, gen_id| {
                 #attach_props
                 #( #attach_calls )*
             });

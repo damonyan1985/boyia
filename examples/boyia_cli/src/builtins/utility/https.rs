@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use crate::runner::r#async::AsyncBuiltinResult;
+use crate::runner::builtin_async::AsyncBuiltinResult;
 use builtin_macro::boyia_class;
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};

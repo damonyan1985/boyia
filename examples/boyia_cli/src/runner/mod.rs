@@ -11,8 +11,11 @@ pub(crate) mod builtin_json;
 #[path = "macro/builtin_vec.rs"]
 pub(crate) mod builtin_vec;
 
-pub(crate) mod r#async;
-pub(crate) mod sync;
+#[path = "macro/builtin_async.rs"]
+pub(crate) mod builtin_async;
+
+#[path = "macro/builtin_sync.rs"]
+pub(crate) mod builtin_sync;
 mod run_loop;
 mod runner;
 mod task_thread;

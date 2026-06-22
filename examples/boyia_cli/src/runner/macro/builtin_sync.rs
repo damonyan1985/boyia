@@ -243,7 +243,7 @@ unsafe fn string_to_boyia_value(vm: &mut BoyiaVM, s: &str) -> Option<BoyiaValue>
 macro_rules! define_sync_native {
     ($native:ident, $min:expr, $handler:ident) => {
         unsafe fn $native(vm: &mut boyia_vm::BoyiaVM) -> boyia_vm::OpHandleResult {
-            $crate::runner::sync::sync_dispatch(vm, $min, $handler)
+            $crate::runner::builtin_sync::sync_dispatch(vm, $min, $handler)
         }
     };
 }

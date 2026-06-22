@@ -3,7 +3,7 @@
 
 #![allow(dead_code)]
 
-use crate::runner::r#async::AsyncBuiltinResult;
+use crate::runner::builtin_async::AsyncBuiltinResult;
 use builtin_macro::boyia_class;
 use std::fs::{self, File};
 use std::io::ErrorKind;
