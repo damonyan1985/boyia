@@ -440,7 +440,7 @@ unsafe fn init_vm_abort(vm_ptr: *mut BoyiaVM, completed: InitVmStage) -> *mut LV
         vm.mGlobals = ptr::null_mut();
     }
     if completed >= InitVmStage::VmShell {
-        ptr::drop_in_place(&mut vm.mVMCode);
+        ptr::drop_in_place(vm.vm_code_mut());
         ptr::drop_in_place(&mut vm.mStrTable);
         ptr::drop_in_place(&mut vm.mEntry);
         dealloc(vm_ptr as *mut u8, vm_layout);
@@ -469,7 +469,7 @@ pub unsafe fn init_vm_boxed(creator: *mut dyn Runtime) -> Option<Box<BoyiaVM>> {
     vm.mESLink = ptr::null_mut();
     vm.mGValSize = 0;
     vm.mFunSize = 0;
-    vm.mVMCode = VMCode::new();
+    *vm.vm_code_mut() = VMCode::new();
     vm.mStrTable = VMStrTable::new();
     vm.mEntry = VMEntryTable::new();
 
@@ -604,7 +604,7 @@ pub unsafe fn load_instructions(buffer: *mut LVoid, size: LInt, vm: &mut BoyiaVM
     if buffer.is_null() || size <= 0 {
         return;
     }
-    let vmcode = &mut (*vm).mVMCode;
+    let vmcode = vm.vm_code_mut();
     let instruction_size = mem::size_of::<Instruction>();
     let count = (size as usize) / instruction_size;
     vmcode.load_from_buffer(buffer as *const Instruction, count);
@@ -802,7 +802,7 @@ pub unsafe fn create_object(vm: &mut BoyiaVM) -> LInt {
 
 /// Cache VM code: clear inline caches, patch instructions.
 pub unsafe fn cache_vm_code(vm: &mut BoyiaVM) {
-    let vmcode = &mut (*vm).mVMCode;
+    let vmcode = vm.vm_code_mut();
     if vmcode.is_empty() {
         return;
     }

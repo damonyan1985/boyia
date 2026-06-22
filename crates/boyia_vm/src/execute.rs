@@ -169,7 +169,7 @@ pub(crate) fn next_pc(pc: OpOffset, vm: &BoyiaVM) -> OpOffset {
     if pc < 0 {
         return kInvalidInstruction;
     }
-    match vm.mVMCode.instruction_at_offset(pc) {
+    match vm.vm_code().instruction_at_offset(pc) {
         Some(inst) if inst.mNext != kInvalidInstruction => inst.mNext,
         _ => kInvalidInstruction,
     }
@@ -177,15 +177,15 @@ pub(crate) fn next_pc(pc: OpOffset, vm: &BoyiaVM) -> OpOffset {
 
 /// Dispatch the instruction at `pc`.
 ///
-/// `inst` and `vm` must be passed together to handlers; reborrowing `vm.mVMCode` and `vm`
+/// `inst` and `vm` must be passed together to handlers; reborrowing `vm.vm_code_mut()` and `vm`
 /// as two mutable references is rejected by the borrow checker, so we use a raw reborrow here.
 #[inline]
 unsafe fn dispatch_instruction_at(pc: OpOffset, vm: &mut BoyiaVM) -> OpHandleResult {
-    let Some(inst) = vm.mVMCode.instruction_at_offset_mut(pc) else {
+    let Some(inst) = vm.vm_code_mut().instruction_at_offset_mut(pc) else {
         return OpHandleResult::kOpResultEnd;
     };
-    // SAFETY: `inst` points at `vm.mVMCode[pc]`; handlers read/mutate that slot and use other
-    // `vm` fields without reallocating `mVMCode` during dispatch.
+    // SAFETY: `inst` points at `vm.vm_code()[pc]`; handlers read/mutate that slot and use other
+    // `vm` fields without reallocating VM code during dispatch.
     dispatch_instruction(unsafe { &mut *ptr::from_mut(inst) }, vm)
 }
 
@@ -798,7 +798,7 @@ unsafe fn handle_if_end(_inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleRe
     let mut pc = (*e_state).mStackFrame.mPC;
     let mut tmp_idx = next_pc(pc, vm);
     while pc_is_valid(tmp_idx) {
-        let Some(tmp_inst) = vm.mVMCode.instruction_at_offset(tmp_idx) else {
+        let Some(tmp_inst) = vm.vm_code().instruction_at_offset(tmp_idx) else {
             break;
         };
         if tmp_inst.mOPCode == CmdType::kCmdElif || tmp_inst.mOPCode == CmdType::kCmdElse {
@@ -1568,7 +1568,7 @@ pub(crate) unsafe fn exec_instruction(vm: &mut BoyiaVM) {
 /// Execute global code: for each entry, set mContext and run execute_code. Match ExecuteGlobalCode in BoyiaCore.cpp.
 pub unsafe fn execute_global_code(vm: &mut BoyiaVM) {
     eprintln!("[execute_global_code] enter");
-    if vm.mEState.is_null() || vm.mEntry.is_empty() || vm.mVMCode.is_empty() {
+    if vm.mEState.is_null() || vm.mEntry.is_empty() || vm.vm_code().is_empty() {
         eprintln!("[execute_global_code] early return null");
         return;
     }

@@ -119,10 +119,10 @@ unsafe fn skip_comment(cs: &mut CompileState) {
     }
 }
 
-/// Allocate one instruction in vm->mVMCode; returns index or None on failure.
+/// Allocate one instruction in vm code table; returns index or None on failure.
 fn allocate_instruction(vm: &mut BoyiaVM) -> Option<usize> {
-    let index = vm.mVMCode.push_instruction()?;
-    let inst = vm.mVMCode.instruction_mut(index)?;
+    let index = vm.vm_code_mut().push_instruction()?;
+    let inst = vm.vm_code_mut().instruction_mut(index)?;
     inst.mOPCode = CmdType::kCmdNone;
     inst.mOPLeft.mType = OpType::OP_NONE;
     inst.mOPLeft.set_int_value(0);
@@ -148,7 +148,7 @@ unsafe fn put_instruction(
     op: CmdType,
 ) -> Option<usize> {
     let idx = allocate_instruction(cs.mVm)?;
-    let new_ins = cs.mVm.mVMCode.instruction_mut(idx)?;
+    let new_ins = cs.mVm.vm_code_mut().instruction_mut(idx)?;
 
     // Init member (match C++ newIns->mOPLeft = *left; newIns->mOPRight = *right when not none)
     new_ins.mOPLeft.mType = OpType::OP_NONE;
@@ -172,7 +172,7 @@ unsafe fn put_instruction(
     let end_idx = cmds.mEnd;
     if end_idx < 0 {
         cmds.mBegin = idx as LIntPtr;
-    } else if let Some(prev) = cs.mVm.mVMCode.instruction_mut(end_idx as usize) {
+    } else if let Some(prev) = cs.mVm.vm_code_mut().instruction_mut(end_idx as usize) {
         prev.mNext = idx as OpOffset;
     }
     cmds.mEnd = idx as LIntPtr;
@@ -183,7 +183,7 @@ unsafe fn put_instruction(
 
 /// Patch instruction at index: set left or right to (OP_CONST_NUMBER, offset).
 fn patch_offset(vm: &mut BoyiaVM, index: usize, is_right: bool, offset: LIntPtr) {
-    let Some(inst) = vm.mVMCode.instruction_mut(index) else {
+    let Some(inst) = vm.vm_code_mut().instruction_mut(index) else {
         return;
     };
     if is_right {
@@ -1485,7 +1485,7 @@ unsafe fn dump_compiled_opcodes(cs: &mut CompileState) {
     let mut n_call_native = 0usize;
     let mut n_after_last_call_native = 0usize;
     while pc_idx >= 0 {
-        let Some(inst) = cs.mVm.mVMCode.instruction_at_offset(pc_idx) else {
+        let Some(inst) = cs.mVm.vm_code().instruction_at_offset(pc_idx) else {
             break;
         };
         let op = inst.mOPCode;

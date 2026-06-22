@@ -953,6 +953,20 @@ pub struct BoyiaVM {
     pub(crate) mCreator: *mut dyn Runtime,
 }
 
+impl BoyiaVM {
+    /// Shared reference to the VM instruction table.
+    #[inline]
+    pub(crate) fn vm_code(&self) -> &VMCode {
+        &self.mVMCode
+    }
+
+    /// Mutable reference to the VM instruction table.
+    #[inline]
+    pub(crate) fn vm_code_mut(&mut self) -> &mut VMCode {
+        &mut self.mVMCode
+    }
+}
+
 /// Recover VM reference from legacy void pointer. Returns `None` if null.
 #[inline]
 pub unsafe fn vm_from_void(vm: *mut LVoid) -> Option<&'static mut BoyiaVM> {
