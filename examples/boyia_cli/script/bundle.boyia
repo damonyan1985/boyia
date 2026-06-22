@@ -1,0 +1,167 @@
+// Merge script/main.boyia and transitive require() targets into script/bundle_out.boyia.
+// Run from examples/boyia_cli: cargo run -- script/bundle.boyia
+
+require("./util/util.boyia");
+
+var bundleQueue = [];
+var bundleVisited = [];
+var bundleMerged = "";
+var bundleEntry = "";
+var bundleOut = "";
+
+class Bundler {
+    fun extractRequireAt(source, pos) {
+        var q = source.indexOf("\"", pos);
+        if (q < 0) {
+            return "";
+        }
+        var q2 = source.indexOf("\"", q + 1);
+        if (q2 < 0) {
+            return "";
+        }
+        return source.substring(q + 1, q2);
+    }
+
+    fun stripOneRequire(source) {
+        var pos = source.indexOf("require(\"", 0);
+        if (pos < 0) {
+            return source;
+        }
+        var end = source.indexOf(");", pos);
+        if (end < 0) {
+            return source;
+        }
+        var tail = end + 2;
+        if (source.indexOf("\n", tail) == tail) {
+            tail = tail + 1;
+        }
+        return source.substring(0, pos) + source.substring(tail, source.length());
+    }
+
+    fun stripRequires(source) {
+        var out = source;
+        while (out.indexOf("require(\"", 0) >= 0) {
+            var next = this.stripOneRequire(out);
+            if (next.equal(out) == 1) {
+                break;
+            }
+            out = next;
+        }
+        return out;
+    }
+
+    fun isVisited(path) {
+        if (bundleVisited.size() == 0) {
+            return 0;
+        }
+        return this.isVisitedFrom(path, 0);
+    }
+
+    fun isVisitedFrom(path, idx) {
+        if (idx >= bundleVisited.size()) {
+            return 0;
+        }
+        if (bundleVisited.get(idx).equal(path) == 1) {
+            return 1;
+        }
+        return this.isVisitedFrom(path, idx + 1);
+    }
+
+    fun enqueueOneRequire(source, basePath, from) {
+        var pos = source.indexOf("require(\"", from);
+        if (pos < 0) {
+            return from;
+        }
+        var rel = this.extractRequireAt(source, pos);
+        if (rel.length() > 0) {
+            var dep = File.resolve(basePath, rel);
+            bundleQueue.add(dep);
+        }
+        var end = source.indexOf(");", pos);
+        if (end < 0) {
+            return from;
+        }
+        var next = end + 2;
+        if (source.indexOf("\n", next) == next) {
+            next = next + 1;
+        }
+        return next;
+    }
+
+    fun enqueueRequires(source, basePath, from) {
+        var next = from;
+        var prev = -1;
+        while (next != prev) {
+            prev = next;
+            next = this.enqueueOneRequire(source, basePath, next);
+        }
+    }
+
+    fun prependBody(source) {
+        var chunk = this.stripRequires(source);
+        if (bundleMerged.length() == 0) {
+            bundleMerged = chunk;
+        } else {
+            bundleMerged = chunk + "\n" + bundleMerged;
+        }
+    }
+
+    fun flush() {
+        var out = "// Bundled from " + bundleEntry + "\n\n";
+        out = out + this.stripRequires(bundleMerged);
+
+        if (File.writeSync(bundleOut, out) == 1) {
+            Util.log("bundle: wrote " + bundleOut);
+        } else {
+            Util.log("bundle: write failed: " + bundleOut);
+        }
+    }
+
+    fun processNext() {
+        if (bundleQueue.size() == 0) {
+            this.flush();
+            return;
+        }
+
+        var path = bundleQueue.get(0);
+        bundleQueue.removeAt(0);
+        var norm = File.normalize(path);
+
+        if (this.isVisited(norm) == 1) {
+            this.processNext();
+            return;
+        }
+        bundleVisited.add(norm);
+
+        var source = File.readSync(norm);
+        if (source == null) {
+            Util.log("bundle: read failed " + norm);
+            this.processNext();
+            return;
+        }
+
+        this.enqueueRequires(source, norm, 0);
+        this.prependBody(source);
+
+        this.processNext();
+    }
+
+    fun run() {
+        var scriptDir = File.join(OS.cwd(), "script");
+        bundleEntry = File.normalize(File.join(scriptDir, "main.boyia"));
+        bundleOut = File.normalize(File.join(scriptDir, "bundle_out.boyia"));
+        bundleQueue = [];
+        bundleVisited = [];
+        bundleMerged = "";
+
+        bundleQueue.add(bundleEntry);
+
+        Util.log("bundle: entry=" + bundleEntry);
+        Util.log("bundle: out=" + bundleOut);
+
+        this.processNext();
+    }
+};
+
+var bundler = new(Bundler);
+bundler.run();

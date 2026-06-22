@@ -5,15 +5,27 @@
 #![allow(non_snake_case)]
 
 use crate::id_creator::IdCreator;
-use boyia_vm::{compile_code, BoyiaVM, LUintPtr};
-use std::collections::HashSet;
+use boyia_vm::{compile_code, kInvalidInstruction, BoyiaVM, LUintPtr, OpOffset};
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::path::Path;
 
+/// One compiled script file and its instruction span in VM instruction table.
+pub(crate) struct Script {
+    /// Resolved path of the `.boyia` source file.
+    pub script_path: String,
+    /// Stable identifier from [`IdCreator::gen_ident_by_str`] for `script_path`.
+    pub script_id: LUintPtr,
+    /// First instruction offset ([`OpOffset`]) emitted for this file in VM code.
+    pub code_start: OpOffset,
+    /// Last instruction offset ([`OpOffset`]) emitted for this file in VM code (inclusive).
+    pub code_end: OpOffset,
+}
+
 /// Mirrors C++ `BoyiaCompileInfo` (`m_programSet`, `m_currentScriptPath`, `m_currentScriptId`, `compile` / `compileFile`).
 pub(crate) struct BoyiaCompileInfo {
-    /// C++ `HashMap<HashString, LBool> m_programSet` — scripts already merged.
-    program_set: HashSet<String>,
+    /// Compiled scripts keyed by canonical path.
+    scripts: HashMap<String, Script>,
     /// C++ `m_currentScriptId` — from `idCreator()->genIdentify(path)` while compiling a file.
     current_script_id: LUintPtr,
     /// C++ `String m_currentScriptPath` (save/restore around nested `compileFile`).
@@ -25,7 +37,7 @@ pub(crate) struct BoyiaCompileInfo {
 impl BoyiaCompileInfo {
     pub fn new() -> Self {
         Self {
-            program_set: HashSet::new(),
+            scripts: HashMap::new(),
             current_script_id: 0,
             current_script_path: String::new(),
             entry_script_path: String::new(),
@@ -75,7 +87,7 @@ impl BoyiaCompileInfo {
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| path.to_string());
 
-        if self.program_set.contains(&dedup_key) {
+        if self.scripts.contains_key(&dedup_key) {
             return;
         }
 
@@ -83,7 +95,8 @@ impl BoyiaCompileInfo {
         let saved_id = self.current_script_id;
 
         self.current_script_path = dedup_key.clone();
-        self.current_script_id = id_creator.gen_ident_by_str(&dedup_key);
+        let script_id = id_creator.gen_ident_by_str(&dedup_key);
+        self.current_script_id = script_id;
 
         let source = match std::fs::read_to_string(path) {
             Ok(s) => s,
@@ -96,8 +109,23 @@ impl BoyiaCompileInfo {
         };
 
         if !source.is_empty() {
+            let code_start = vm.vm_code().len() as OpOffset;
             self.compile_string(&source, vm);
-            self.program_set.insert(dedup_key);
+            let code_len = vm.vm_code().len();
+            let code_end = if code_len > code_start as usize {
+                (code_len - 1) as OpOffset
+            } else {
+                kInvalidInstruction
+            };
+            self.scripts.insert(
+                dedup_key.clone(),
+                Script {
+                    script_path: dedup_key,
+                    script_id,
+                    code_start,
+                    code_end,
+                },
+            );
         }
 
         self.current_script_path = saved_path;

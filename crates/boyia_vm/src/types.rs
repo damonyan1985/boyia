@@ -685,7 +685,7 @@ pub(crate) struct VMCpu {
     pub mReg1: BoyiaValue,
 }
 
-pub(crate) struct VMCode {
+pub struct VMCode {
     mCode: Vec<Instruction>,
 }
 
@@ -956,7 +956,7 @@ pub struct BoyiaVM {
 impl BoyiaVM {
     /// Shared reference to the VM instruction table.
     #[inline]
-    pub(crate) fn vm_code(&self) -> &VMCode {
+    pub fn vm_code(&self) -> &VMCode {
         &self.mVMCode
     }
 
