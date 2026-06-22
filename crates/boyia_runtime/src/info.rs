@@ -5,10 +5,16 @@
 #![allow(non_snake_case)]
 
 use crate::id_creator::IdCreator;
-use boyia_vm::{compile_code, kInvalidInstruction, BoyiaVM, LUintPtr, OpOffset};
+use boyia_vm::{compile_code, kInvalidInstruction, BoyiaVM, LInt, LUintPtr, OpOffset};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::path::Path;
+
+/// Source line/column for a compiled instruction.
+pub(crate) struct SourcePosition {
+    pub line_num: LInt,
+    pub column_num: LInt,
+}
 
 /// One compiled script file and its instruction span in VM instruction table.
 pub(crate) struct Script {
@@ -20,17 +26,39 @@ pub(crate) struct Script {
     pub code_start: OpOffset,
     /// Last instruction offset ([`OpOffset`]) emitted for this file in VM code (inclusive).
     pub code_end: OpOffset,
+    /// Source position per instruction offset within this script's span.
+    pub code_positions: HashMap<OpOffset, SourcePosition>,
+}
+
+impl Script {
+    pub(crate) fn new(script_path: String, script_id: LUintPtr, code_start: OpOffset) -> Self {
+        Self {
+            script_path,
+            script_id,
+            code_start,
+            code_end: kInvalidInstruction,
+            code_positions: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn set_code_position(&mut self, code_index: OpOffset, line_num: LInt, column_num: LInt) {
+        self.code_positions.insert(
+            code_index,
+            SourcePosition {
+                line_num,
+                column_num,
+            },
+        );
+    }
 }
 
 /// Mirrors C++ `BoyiaCompileInfo` (`m_programSet`, `m_currentScriptPath`, `m_currentScriptId`, `compile` / `compileFile`).
 pub(crate) struct BoyiaCompileInfo {
-    /// Compiled scripts keyed by canonical path.
+    /// Finished scripts keyed by canonical path.
     scripts: HashMap<String, Script>,
-    /// C++ `m_currentScriptId` — from `idCreator()->genIdentify(path)` while compiling a file.
-    current_script_id: LUintPtr,
-    /// C++ `String m_currentScriptPath` (save/restore around nested `compileFile`).
-    current_script_path: String,
-    /// Rust CLI: when outer `compile_file` restores an empty path, `BY_Require` still resolves relative to this entry file.
+    /// Script currently being compiled (`compile_file`); moved into [scripts] when done.
+    current_script: Option<Script>,
+    /// Rust CLI: when no [current_script], `BY_Require` resolves relative to this entry file.
     entry_script_path: String,
 }
 
@@ -38,20 +66,25 @@ impl BoyiaCompileInfo {
     pub fn new() -> Self {
         Self {
             scripts: HashMap::new(),
-            current_script_id: 0,
-            current_script_path: String::new(),
+            current_script: None,
             entry_script_path: String::new(),
         }
     }
 
     #[allow(dead_code)]
     pub(crate) fn current_script_path(&self) -> &str {
-        &self.current_script_path
+        self.current_script
+            .as_ref()
+            .map(|script| script.script_path.as_str())
+            .unwrap_or("")
     }
 
     #[allow(dead_code)]
     pub(crate) fn current_script_id(&self) -> LUintPtr {
-        self.current_script_id
+        self.current_script
+            .as_ref()
+            .map(|script| script.script_id)
+            .unwrap_or(0)
     }
 
     /// Persist main script path for relative requires (see `BoyiaRuntime::set_entry_script_path`).
@@ -72,13 +105,21 @@ impl BoyiaCompileInfo {
 
     /// Path context for `BY_Require`: active `compile_file` target, else `entry_script_path`, else empty (caller may use CWD).
     pub fn require_path_base(&self) -> &str {
-        if !self.current_script_path.is_empty() {
-            return &self.current_script_path;
+        if let Some(script) = &self.current_script {
+            return &script.script_path;
         }
         if !self.entry_script_path.is_empty() {
             return &self.entry_script_path;
         }
         ""
+    }
+
+    /// `SetCodePosition` while compiling the active script file.
+    pub(crate) fn set_code_position(&mut self, code_index: OpOffset, line_num: LInt, column_num: LInt) {
+        let Some(script) = &mut self.current_script else {
+            return;
+        };
+        script.set_code_position(code_index, line_num, column_num);
     }
 
     /// C++ `BoyiaCompileInfo::compileFile`: skip if path seen, read file, `compile`, restore previous path/id.
@@ -91,45 +132,42 @@ impl BoyiaCompileInfo {
             return;
         }
 
-        let saved_path = std::mem::take(&mut self.current_script_path);
-        let saved_id = self.current_script_id;
-
-        self.current_script_path = dedup_key.clone();
-        let script_id = id_creator.gen_ident_by_str(&dedup_key);
-        self.current_script_id = script_id;
+        let saved_script = self.current_script.take();
 
         let source = match std::fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("compile_file: read {}: {}", path, e);
-                self.current_script_path = saved_path;
-                self.current_script_id = saved_id;
+                self.current_script = saved_script;
                 return;
             }
         };
 
-        if !source.is_empty() {
-            let code_start = vm.vm_code().len() as OpOffset;
-            self.compile_string(&source, vm);
-            let code_len = vm.vm_code().len();
-            let code_end = if code_len > code_start as usize {
-                (code_len - 1) as OpOffset
-            } else {
-                kInvalidInstruction
-            };
-            self.scripts.insert(
-                dedup_key.clone(),
-                Script {
-                    script_path: dedup_key,
-                    script_id,
-                    code_start,
-                    code_end,
-                },
-            );
+        if source.is_empty() {
+            self.current_script = saved_script;
+            return;
         }
 
-        self.current_script_path = saved_path;
-        self.current_script_id = saved_id;
+        let script_id = id_creator.gen_ident_by_str(&dedup_key);
+        let code_start = vm.vm_code().len() as OpOffset;
+        self.current_script = Some(Script::new(dedup_key.clone(), script_id, code_start));
+
+        self.compile_string(&source, vm);
+
+        let code_len = vm.vm_code().len();
+        let code_end = if code_len > code_start as usize {
+            (code_len - 1) as OpOffset
+        } else {
+            kInvalidInstruction
+        };
+        if let Some(script) = self.current_script.as_mut() {
+            script.code_end = code_end;
+        }
+        if let Some(script) = self.current_script.take() {
+            self.scripts.insert(dedup_key, script);
+        }
+
+        self.current_script = saved_script;
     }
 }
 

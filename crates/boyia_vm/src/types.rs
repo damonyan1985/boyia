@@ -99,6 +99,9 @@ pub trait Runtime {
     /// C++ `BoyiaCompileInfo::compileFile`: load `resolved_path` from disk, merge into VM if not already loaded.
     /// Default implementation does nothing (embedders without filesystem).
     fn compile_script_file(&mut self, _resolved_path: &str);
+
+    /// Record source line/column for a newly emitted instruction (`SetCodePosition` in C++).
+    fn set_code_position(&mut self, _code_index: OpOffset, _line_num: LInt, _column_num: LInt) {}
 }
 
 // ---------------------------------------------------------------------------

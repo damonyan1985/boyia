@@ -12,8 +12,8 @@ use boyia_builtins::{
 use boyia_vm::{
     cache_vm_code, consume_micro_task, delete_data, execute_global_code,
     free_memory_pool, get_runtime_from_vm, init_memory_pool, init_vm_boxed, new_data, vm_from_void,
-    BoyiaFunction, BoyiaStr, BoyiaVM, BoyiaValue, Global, GlobalList, K_BOYIA_NULL, LInt, LUintPtr, LVoid,
-    NativeFunction, NativePtr, OpHandleResult, Runtime, ValueType,
+    BoyiaFunction, BoyiaStr, BoyiaVM, BoyiaValue, Global, GlobalList, K_BOYIA_NULL, LInt, LUintPtr,
+    LVoid, NativeFunction, NativePtr, OpHandleResult, OpOffset, Runtime, ValueType,
 };
 use std::any::Any;
 use std::ptr;
@@ -424,6 +424,11 @@ impl Runtime for BoyiaRuntime {
         if let Some(vm) = vm.as_deref_mut() {
             compile_info.compile_file(resolved_path, vm, id_creator);
         }
+    }
+
+    fn set_code_position(&mut self, code_index: OpOffset, line_num: LInt, column_num: LInt) {
+        self.compile_info
+            .set_code_position(code_index, line_num, column_num);
     }
 }
 
