@@ -250,7 +250,7 @@ class PrinterExt extends Printer {
             Util.log("deleteFileAsync: " + result.get("message"));
         }
 
-        Util.log("os result: " + OS.cwd());
+        Util.log("os name: " + OS.name() + ", current directory: " + OS.cwd());
     }
 
     prop async createFileAsync(path) {

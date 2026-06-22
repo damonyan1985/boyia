@@ -3,13 +3,13 @@
 
 require("./util/util.boyia");
 
-var bundleQueue = [];
-var bundleVisited = [];
-var bundleMerged = "";
-var bundleEntry = "";
-var bundleOut = "";
-
 class Bundler {
+    prop bundleQueue = [];
+    prop bundleVisited = [];
+    prop bundleMerged = "";
+    prop bundleEntry = "";
+    prop bundleOut = "";
+
     fun extractRequireAt(source, pos) {
         var q = source.indexOf("\"", pos);
         if (q < 0) {
