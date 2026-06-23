@@ -87,4 +87,4 @@ pub use core::{
     consume_micro_task,
     iterate_micro_task,
 };
-pub use execute::{execute_code, execute_global_code};
+pub use execute::{execute_code, execute_entry_range, execute_global_code};

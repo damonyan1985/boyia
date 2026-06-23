@@ -171,7 +171,7 @@ class PrinterExt extends Printer {
     }
 
     prop fun testIsAbsolute() {
-        var absPath = "C:/work/demo.txt";
+        var absPath = "/Users/Work/demo.txt";
         var relPath = "script/main.boyia";
         var abs = File.isAbsolute(absPath);
         var rel = File.isAbsolute(relPath);

@@ -163,9 +163,15 @@ pub unsafe fn require_file(vm: &mut BoyiaVM) -> OpHandleResult {
     }
 
     println!("call require_file4");
-    let current = (*rt).require_path_base();
-    let resolved = resolve_require_path(current, &require_rel);
+    let current = (*rt).require_path_base().to_string();
+    let resolved = resolve_require_path(&current, &require_rel);
     println!("require_file path = {}", &resolved);
+
+    // Compile the module (and its deps, ordered children-first), then run the newly added
+    // entries immediately so their classes/functions are registered for the running program.
+    let before = vm.entry_len();
     (*rt).compile_script_file(&resolved);
+    let after = vm.entry_len();
+    boyia_vm::execute_entry_range(vm, before, after);
     OpHandleResult::kOpResultSuccess
 }

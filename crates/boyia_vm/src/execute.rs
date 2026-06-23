@@ -1572,11 +1572,25 @@ pub unsafe fn execute_global_code(vm: &mut BoyiaVM) {
         eprintln!("[execute_global_code] early return null");
         return;
     }
-    reset_scene(vm.mEState);
-    let size = vm.mEntry.len();
+    let size = vm.entry_len();
     eprintln!("[execute_global_code] entry size={}", size);
+    execute_entry_range(vm, 0, size);
+}
+
+/// Execute the global chains in `mEntry[start..end]` (used by runtime `require` to run a
+/// freshly-compiled module's global code immediately). Order within the range is honored as-is.
+pub unsafe fn execute_entry_range(vm: &mut BoyiaVM, start: usize, end: usize) {
+    if vm.mEState.is_null() || vm.vm_code().is_empty() {
+        return;
+    }
+    let len = vm.entry_len();
+    let end = end.min(len);
+    if start >= end {
+        return;
+    }
+    reset_scene(vm.mEState);
     let mut cmds = crate::types::CommandTable::new();
-    for i in 0..size {
+    for i in start..end {
         let entry_offset = vm.mEntry.get(i).unwrap_or(0);
         cmds.mBegin = entry_offset as LIntPtr;
         cmds.mEnd = kInvalidInstruction;
