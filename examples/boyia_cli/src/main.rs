@@ -60,4 +60,8 @@ fn main() {
         std::process::exit(1);
     }
 
+    if let Err(e) = runner.run_exe_file() {
+        eprintln!("Error: run failed: {e:?}");
+        std::process::exit(1);
+    }
 }

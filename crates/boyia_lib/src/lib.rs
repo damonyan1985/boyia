@@ -5,7 +5,7 @@
 #![allow(non_snake_case)]
 
 use boyia_vm::{get_local_size, get_local_value, get_runtime_from_vm, get_string_buffer, get_boyia_class_id,
-    BoyiaValue, LVoid, OpHandleResult, ValueType, BoyiaVM};
+    CompileArgs, BoyiaValue, LVoid, OpHandleResult, ValueType, BoyiaVM};
 use std::path::{Path, PathBuf};
 
 /// new: create object from local 0 (class). Match CreateObject in BoyiaCore.cpp.
@@ -106,7 +106,37 @@ fn resolve_require_path(base: &str, rel: &str) -> String {
     normalize_path_key(&joined.to_string_lossy())
 }
 
+/// Compile-time `require("...")` (registered in the runtime compile-function table).
+/// Resolves the path against the current script base and enqueues it into `pending_scripts`;
+/// the dependency is compiled later (after the current file), not compiled or executed now.
+pub unsafe fn require_file_compile(args: &CompileArgs) -> bool {
+    let vm_ptr = args.vm();
+    if vm_ptr.is_null() {
+        return false;
+    }
+    let vm = &mut *vm_ptr;
+    let rt = get_runtime_from_vm(vm);
+    if rt.is_null() {
+        return false;
+    }
+    if (*rt).is_load_exe_file() {
+        return true;
+    }
+    let Some(require_rel) = args.str(0) else {
+        eprintln!("require: expected a string literal path");
+        return true;
+    };
+    if require_rel.is_empty() {
+        return true;
+    }
+    let current = (*rt).require_path_base().to_string();
+    let resolved = resolve_require_path(&current, require_rel);
+    (*rt).enqueue_compile_script(&resolved);
+    true
+}
+
 /// `BoyiaLib.cpp` `requireFile` — native name `BY_Require` in C++ `initNativeFunction`.
+/// Runtime fallback for dynamic `require(expr)`; literal `require("...")` is handled at compile time.
 pub unsafe fn require_file(vm: &mut BoyiaVM) -> OpHandleResult {
     println!("call require_file");
     let rt = get_runtime_from_vm(vm);

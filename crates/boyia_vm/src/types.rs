@@ -43,6 +43,18 @@ pub trait Runtime {
     fn find_native_func(&self, key: LUintPtr) -> LInt;
     /// Call native function by index; `vm` is the active VM instance.
     fn call_native_function(&mut self, vm: &mut BoyiaVM, idx: LInt) -> LInt;
+
+    /// Find compile-time function index by name key; -1 if not found.
+    fn find_compile_func(&self, _key: LUintPtr) -> LInt {
+        -1
+    }
+    /// Call compile-time function by index with parsed [CompileArgs]; returns true if handled.
+    fn call_compile_function(&self, _idx: LInt, _args: &CompileArgs) -> bool {
+        false
+    }
+
+    /// Enqueue an already-resolved script path for deferred compilation (compile-time `require`).
+    fn enqueue_compile_script(&mut self, _resolved_path: &str) {}
     /// Get or assign id for a string key (e.g. compile token name).
     fn gen_identifier(&mut self, key: &str) -> LUintPtr;
     /// Get or assign id for a string from [BoyiaStr] (e.g. Map key, builtins).
@@ -881,6 +893,14 @@ impl VMEntryTable {
         true
     }
 
+    /// Move the entry at `index` to the end (used to run dependencies before the entry script).
+    pub fn move_to_end(&mut self, index: usize) {
+        if index < self.mTable.len() {
+            let v = self.mTable.remove(index);
+            self.mTable.push(v);
+        }
+    }
+
     /// Replace all entries from a raw buffer (used by `load_entry_table`).
     pub unsafe fn load_from_buffer(&mut self, buffer: *const LInt, count: usize) -> bool {
         if buffer.is_null() || count > ENTRY_CAPACITY {
@@ -968,6 +988,18 @@ impl BoyiaVM {
     pub(crate) fn vm_code_mut(&mut self) -> &mut VMCode {
         &mut self.mVMCode
     }
+
+    /// Number of global entry chains (one per compiled file's top-level code).
+    #[inline]
+    pub fn entry_len(&self) -> usize {
+        self.mEntry.len()
+    }
+
+    /// Move the entry chain at `index` to the end (run dependencies before the entry script).
+    #[inline]
+    pub fn move_entry_to_end(&mut self, index: usize) {
+        self.mEntry.move_to_end(index);
+    }
 }
 
 /// Recover VM reference from legacy void pointer. Returns `None` if null.
@@ -986,4 +1018,95 @@ pub type NativePtr = unsafe fn(&mut BoyiaVM) -> OpHandleResult;
 pub struct NativeFunction {
     pub mNameKey: LUintPtr,
     pub mAddr: NativePtr,
+}
+
+// ---------------------------------------------------------------------------
+// Compile-time functions (resolved while compiling, e.g. `require`)
+// ---------------------------------------------------------------------------
+
+/// A single argument to a compile-time function. Literals only (string/int/real/bool).
+#[derive(Clone, Debug)]
+pub enum CompileArg {
+    Str(String),
+    Int(LIntPtr),
+    Real(LReal64),
+    Bool(bool),
+}
+
+/// Argument list passed to a [CompileFunction]. Carries the VM pointer so the
+/// callee can reach the runtime (e.g. enqueue / compile a required file).
+pub struct CompileArgs {
+    vm: *mut BoyiaVM,
+    args: Vec<CompileArg>,
+}
+
+impl CompileArgs {
+    pub fn new(vm: *mut BoyiaVM) -> Self {
+        Self {
+            vm,
+            args: Vec::new(),
+        }
+    }
+
+    pub fn push(&mut self, arg: CompileArg) {
+        self.args.push(arg);
+    }
+
+    /// VM pointer; callee derives the runtime via [crate::get_runtime_from_vm].
+    pub fn vm(&self) -> *mut BoyiaVM {
+        self.vm
+    }
+
+    pub fn len(&self) -> usize {
+        self.args.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.args.is_empty()
+    }
+
+    pub fn get(&self, index: usize) -> Option<&CompileArg> {
+        self.args.get(index)
+    }
+
+    /// Borrow argument `index` as a string slice when it is [CompileArg::Str].
+    pub fn str(&self, index: usize) -> Option<&str> {
+        match self.args.get(index) {
+            Some(CompileArg::Str(s)) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Argument `index` as integer when it is [CompileArg::Int].
+    pub fn int(&self, index: usize) -> Option<LIntPtr> {
+        match self.args.get(index) {
+            Some(CompileArg::Int(v)) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// Argument `index` as real when it is [CompileArg::Real].
+    pub fn real(&self, index: usize) -> Option<LReal64> {
+        match self.args.get(index) {
+            Some(CompileArg::Real(v)) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// Argument `index` as bool when it is [CompileArg::Bool].
+    pub fn bool(&self, index: usize) -> Option<bool> {
+        match self.args.get(index) {
+            Some(CompileArg::Bool(v)) => Some(*v),
+            _ => None,
+        }
+    }
+}
+
+/// Compile-time function pointer: handles a call during compilation. Returns true if handled.
+pub type CompileFunction = unsafe fn(&CompileArgs) -> bool;
+
+/// Compile-time function table entry (mirrors [NativeFunction]).
+pub struct CompileNativeFunction {
+    pub mNameKey: LUintPtr,
+    pub mAddr: CompileFunction,
 }

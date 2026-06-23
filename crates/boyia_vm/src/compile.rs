@@ -690,6 +690,82 @@ fn find_native_func(key: LUintPtr, vm: &mut BoyiaVM) -> LInt {
     unsafe { crate::core::find_native_func(vm, key) }
 }
 
+/// Resolve compile-time function by key via runtime dispatcher.
+fn find_compile_func(key: LUintPtr, vm: &mut BoyiaVM) -> LInt {
+    unsafe { crate::core::find_compile_func(vm, key) }
+}
+
+/// Unescaped content of the current STRING_VALUE token (matches add_string_from_token).
+unsafe fn string_literal_from_token(cs: &CompileState) -> String {
+    let name = &cs.mToken.mTokenName;
+    let raw_len = (name.mLen - 2).max(0) as usize;
+    if raw_len == 0 || name.mPtr.is_null() {
+        return String::new();
+    }
+    let src = name.mPtr;
+    let mut out: Vec<u8> = Vec::with_capacity(raw_len);
+    let mut i = 0usize;
+    while i < raw_len {
+        if (*src.add(i) as u8) == b'\\' && i + 1 < raw_len {
+            match *src.add(i + 1) as u8 {
+                b'"' => { out.push(b'"'); i += 2; continue; }
+                b'\\' => { out.push(b'\\'); i += 2; continue; }
+                b'n' => { out.push(b'\n'); i += 2; continue; }
+                b't' => { out.push(b'\t'); i += 2; continue; }
+                b'r' => { out.push(b'\r'); i += 2; continue; }
+                _ => {}
+            }
+        }
+        out.push(*src.add(i) as u8);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Parse `( literal, ... )` for a compile-time function into [CompileArgs].
+/// Supports string, integer, real and bool (`true`/`false`) literals. Leaves the current token on `)`.
+unsafe fn parse_compile_args(cs: &mut CompileState) -> CompileArgs {
+    let mut args = CompileArgs::new(cs.mVm as *mut BoyiaVM);
+    next_token(cs); // expect '('
+    if cs.mToken.mTokenValue != TokenValue::LPTR {
+        eprintln!("compile function: expected '('");
+        return args;
+    }
+    loop {
+        next_token(cs);
+        if cs.mToken.mTokenValue == TokenValue::RPTR {
+            break;
+        }
+        match cs.mToken.mTokenType {
+            TokenType::STRING_VALUE => args.push(CompileArg::Str(string_literal_from_token(cs))),
+            TokenType::NUMBER => args.push(CompileArg::Int(parse_number_from_token(cs))),
+            TokenType::REAL => args.push(CompileArg::Real(parse_real_from_token(cs))),
+            TokenType::IDENTIFIER => match token_name_slice(cs) {
+                b"true" => args.push(CompileArg::Bool(true)),
+                b"false" => args.push(CompileArg::Bool(false)),
+                _ => eprintln!("compile function: unsupported identifier argument (literal expected)"),
+            },
+            _ => {
+                eprintln!("compile function: unsupported argument (literal expected)");
+            }
+        }
+        next_token(cs);
+        if cs.mToken.mTokenValue == TokenValue::RPTR {
+            break;
+        }
+        if cs.mToken.mTokenValue != TokenValue::COMMA {
+            break;
+        }
+    }
+    args
+}
+
+/// Dispatch a compile-time function call (no bytecode emitted).
+unsafe fn call_compile_function_statement(cs: &mut CompileState, idx: LInt) {
+    let args = parse_compile_args(cs);
+    let _ = crate::core::call_compile_function(cs.mVm, idx, &args);
+}
+
 /// PushArgStatement(needPushFunction, cs) per BoyiaCore.cpp: if needPushFunction { ++argCount; PutInstruction PushArg; NextToken; if RPTR Assign(argCount) return; Putback; } do { EvalExpression; PutInstruction PushArg; ++argCount; } while (COMMA); PutInstruction Assign(argCount).
 unsafe fn push_arg_statement(cs: &mut CompileState, need_push_function: bool) {
     let mut arg_count: LIntPtr = 0;
@@ -782,6 +858,12 @@ unsafe fn atom(cs: &mut CompileState) {
     match cs.mToken.mTokenType {
         TokenType::IDENTIFIER => {
             let key = gen_identifier(cs);
+            let compile_idx = find_compile_func(key, cs.mVm);
+            if compile_idx >= 0 {
+                call_compile_function_statement(cs, compile_idx);
+                next_token(cs);
+                return;
+            }
             let idx = find_native_func(key, cs.mVm);
             if idx >= 0 {
                 call_native_statement(cs, idx);
@@ -1473,23 +1555,8 @@ unsafe fn parse_statement(cs: &mut CompileState) {
             brace += 1;
         }
     }
-    // Nested compile / execute global (match ParseStatement after do-while).
-    let es = cs.mVm.mEState;
-    if !es.is_null() && !(*es).mStackFrame.mContext.is_null() {
-        let state = crate::core::create_exec_state(cs.mVm);
-        crate::core::switch_exec_state(state, cs.mVm);
-    }
-    {
-        if !cs.mVm.mEState.is_null() {
-            let cmds = &mut cs.mCmds as *mut CommandTable;
-            (*cs.mVm.mEState).mStackFrame.mContext = cmds;
-            crate::execute::execute_code(cs.mVm);
-        }
-        if cs.mVm.mEState != es && !es.is_null() {
-            crate::core::destroy_exec_state(cs.mVm.mEState, cs.mVm);
-            crate::core::switch_exec_state(es, cs.mVm);
-        }
-    }
+    // Compile-only: record this file's global chain as an entry; execution is deferred
+    // to `run_exe_file` (after all `require` dependencies have been compiled).
     append_entry(cs);
 }
 

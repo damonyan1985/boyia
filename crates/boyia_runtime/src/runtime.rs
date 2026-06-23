@@ -12,13 +12,15 @@ use boyia_builtins::{
 use boyia_vm::{
     cache_vm_code, consume_micro_task, delete_data, execute_global_code,
     free_memory_pool, get_runtime_from_vm, init_memory_pool, init_vm_boxed, new_data, vm_from_void,
-    BoyiaFunction, BoyiaStr, BoyiaVM, BoyiaValue, Global, GlobalList, K_BOYIA_NULL, LInt, LUintPtr,
-    LVoid, NativeFunction, NativePtr, OpHandleResult, OpOffset, Runtime, ValueType,
+    CompileArgs, BoyiaFunction, BoyiaStr, BoyiaVM, BoyiaValue, CompileFunction, CompileNativeFunction,
+    Global, GlobalList, K_BOYIA_NULL, LInt, LUintPtr, LVoid, NativeFunction, NativePtr,
+    OpHandleResult, OpOffset, Runtime, ValueType,
 };
 use std::any::Any;
 use std::ptr;
 
 const K_NATIVE_FUNCTION_CAPACITY: usize = 100;
+const K_COMPILE_FUNCTION_CAPACITY: usize = 32;
 /// Memory pool size (6 MB). Match BoyiaRuntime.cpp kMemoryPoolSize.
 const K_MEMORY_POOL_SIZE: LInt = 6 * 1024 * 1024;
 
@@ -32,6 +34,8 @@ pub struct BoyiaRuntime {
     gc: *mut boyia_gc::BoyiaGc,
     /// Native function table: (name_key, ptr). Terminated by mAddr == null (we use 0 index as sentinel or check length).
     native_fun_table: Vec<NativeFunction>,
+    /// Compile-time function table (e.g. `require`), dispatched while compiling.
+    compile_fun_table: Vec<CompileNativeFunction>,
     id_creator: IdCreator,
     /// C++ `m_compileInfo` (`BoyiaCompileInfo`).
     compile_info: BoyiaCompileInfo,
@@ -52,6 +56,7 @@ impl BoyiaRuntime {
             memory_pool: ptr::null_mut(),
             gc: ptr::null_mut(),
             native_fun_table: Vec::with_capacity(K_NATIVE_FUNCTION_CAPACITY),
+            compile_fun_table: Vec::with_capacity(K_COMPILE_FUNCTION_CAPACITY),
             id_creator: IdCreator::new(),
             compile_info: BoyiaCompileInfo::new(),
             is_load_exe_file: false,
@@ -105,6 +110,7 @@ impl BoyiaRuntime {
 
         eprintln!("[init] 3 init_native_function");
         self.init_native_function();
+        self.init_compile_function();
 
         eprintln!("[init] 4 builtin_string_class");
         // Builtin classes: use BuiltinId keys per BoyiaValue.h (CreateGlobalClass(kBoyiaString, vm) etc.)
@@ -157,6 +163,7 @@ impl BoyiaRuntime {
         self.id_creator.gen_ident_by_str("this");
         self.id_creator.gen_ident_by_str("String");
         self.init_native_function();
+        self.init_compile_function();
     }
 
     fn init_native_function(&mut self) {
@@ -164,6 +171,12 @@ impl BoyiaRuntime {
         self.append_native("BY_Log", boyia_lib::log_print as NativePtr);
         self.append_native("require", boyia_lib::require_file as NativePtr);
         self.append_native_sentinel();
+    }
+
+    /// Register compile-time functions (resolved while compiling, before native dispatch).
+    fn init_compile_function(&mut self) {
+        self.append_compile_native("require", boyia_lib::require_file_compile as CompileFunction);
+        self.append_compile_native_sentinel();
     }
 
     fn append_native(&mut self, name: &str, ptr: NativePtr) {
@@ -183,15 +196,43 @@ impl BoyiaRuntime {
         });
     }
 
+    fn append_compile_native(&mut self, name: &str, ptr: CompileFunction) {
+        let id = self.id_creator.gen_ident_by_str(name);
+        if self.compile_fun_table.len() < self.compile_fun_table.capacity() {
+            self.compile_fun_table.push(CompileNativeFunction {
+                mNameKey: id,
+                mAddr: ptr,
+            });
+        }
+    }
+
+    fn append_compile_native_sentinel(&mut self) {
+        self.compile_fun_table.push(CompileNativeFunction {
+            mNameKey: 0,
+            mAddr: sentinel_compile_native as CompileFunction,
+        });
+    }
+
     /// Compile script source into the VM (`BoyiaCompileInfo::compile` / `CompileCode`).
+    /// Compile-time `require` enqueues dependencies; they are compiled after the entry finishes.
     pub fn compile(&mut self, script: &str) {
         let BoyiaRuntime {
             compile_info,
+            id_creator,
             vm,
             ..
         } = self;
         if let Some(vm) = vm.as_deref_mut() {
+            let entry_start = vm.entry_len();
             compile_info.compile_string(script, vm);
+            let entry_end = vm.entry_len();
+            compile_info.drain_pending_scripts(vm, id_creator);
+            // Run dependencies before the entry: move the entry's own chain(s) to the end.
+            if vm.entry_len() > entry_end {
+                for _ in entry_start..entry_end {
+                    vm.move_entry_to_end(entry_start);
+                }
+            }
         }
     }
 
@@ -336,6 +377,34 @@ impl Runtime for BoyiaRuntime {
         unsafe { (nf.mAddr)(vm) as i32 }
     }
 
+    fn find_compile_func(&self, key: LUintPtr) -> LInt {
+        for (idx, cf) in self.compile_fun_table.iter().enumerate() {
+            if cf.mNameKey == 0 || cf.mAddr as *const () == sentinel_compile_native as *const () {
+                break;
+            }
+            if cf.mNameKey == key {
+                return idx as LInt;
+            }
+        }
+        -1
+    }
+
+    fn call_compile_function(&self, idx: LInt, args: &CompileArgs) -> bool {
+        if idx < 0 || idx as usize >= self.compile_fun_table.len() {
+            return false;
+        }
+        let cf = &self.compile_fun_table[idx as usize];
+        if cf.mAddr as *const () == sentinel_compile_native as *const () {
+            return false;
+        }
+        unsafe { (cf.mAddr)(args) }
+    }
+
+    fn enqueue_compile_script(&mut self, resolved_path: &str) {
+        self.compile_info
+            .enqueue_script(resolved_path, &mut self.id_creator);
+    }
+
     fn gen_identifier(&mut self, key: &str) -> LUintPtr {
         self.id_creator.gen_ident_by_str(key)
     }
@@ -457,4 +526,9 @@ impl Drop for BoyiaRuntime {
 /// Sentinel: end of native table (never called with valid idx).
 unsafe fn sentinel_native(_vm: &mut BoyiaVM) -> OpHandleResult {
     OpHandleResult::kOpResultEnd
+}
+
+/// Sentinel: end of compile-time function table.
+unsafe fn sentinel_compile_native(_args: &CompileArgs) -> bool {
+    false
 }

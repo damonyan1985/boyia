@@ -943,6 +943,28 @@ pub(crate) unsafe fn find_native_func(vm: &mut BoyiaVM, key: LUintPtr) -> LInt {
     (*rt).find_native_func(key)
 }
 
+/// Find compile-time function index by name key. Crate-internal only.
+pub(crate) unsafe fn find_compile_func(vm: &mut BoyiaVM, key: LUintPtr) -> LInt {
+    let rt = get_runtime_from_vm(vm);
+    if rt.is_null() {
+        return -1;
+    }
+    (*rt).find_compile_func(key)
+}
+
+/// Call compile-time function by index with parsed [crate::CompileArgs]. Returns true if handled.
+pub(crate) unsafe fn call_compile_function(
+    vm: &mut BoyiaVM,
+    idx: LInt,
+    args: &crate::CompileArgs,
+) -> bool {
+    let rt = get_runtime_from_vm(vm);
+    if rt.is_null() {
+        return false;
+    }
+    (*rt).call_compile_function(idx, args)
+}
+
 /// Call native function by index. Uses [get_runtime_from_vm] to get [Runtime] and calls [Runtime::call_native_function].
 pub unsafe fn native_call_by_index(vm: &mut BoyiaVM, idx: LInt) -> LInt {
     let rt = get_runtime_from_vm(vm);

@@ -58,6 +58,8 @@ pub(crate) struct BoyiaCompileInfo {
     scripts: HashMap<String, Script>,
     /// Script currently being compiled (`compile_file`); moved into [scripts] when done.
     current_script: Option<Script>,
+    /// Scripts discovered via compile-time `require`, not yet compiled (FIFO).
+    pending_scripts: Vec<Script>,
     /// Rust CLI: when no [current_script], `BY_Require` resolves relative to this entry file.
     entry_script_path: String,
 }
@@ -67,6 +69,7 @@ impl BoyiaCompileInfo {
         Self {
             scripts: HashMap::new(),
             current_script: None,
+            pending_scripts: Vec::new(),
             entry_script_path: String::new(),
         }
     }
@@ -120,6 +123,46 @@ impl BoyiaCompileInfo {
             return;
         };
         script.set_code_position(code_index, line_num, column_num);
+    }
+
+    fn canonical_path(path: &str) -> String {
+        std::fs::canonicalize(Path::new(path))
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| path.to_string())
+    }
+
+    /// True when `path` is already compiled, pending, currently compiling, or the entry.
+    fn is_script_known(&self, path: &str) -> bool {
+        self.scripts.contains_key(path)
+            || self.entry_script_path == path
+            || self.pending_scripts.iter().any(|s| s.script_path == path)
+            || self
+                .current_script
+                .as_ref()
+                .is_some_and(|s| s.script_path == path)
+    }
+
+    /// Compile-time `require`: enqueue an already-resolved script path for later compilation.
+    /// Does not compile or execute now (see [drain_pending_scripts]).
+    pub(crate) fn enqueue_script(&mut self, resolved_path: &str, id_creator: &mut IdCreator) {
+        let dedup_key = Self::canonical_path(resolved_path);
+        if self.is_script_known(&dedup_key) {
+            return;
+        }
+        let script_id = id_creator.gen_ident_by_str(&dedup_key);
+        self.pending_scripts
+            .push(Script::new(dedup_key, script_id, kInvalidInstruction));
+    }
+
+    /// Compile all queued scripts (FIFO). Each compile may enqueue more requires.
+    pub(crate) fn drain_pending_scripts(&mut self, vm: &mut BoyiaVM, id_creator: &mut IdCreator) {
+        while !self.pending_scripts.is_empty() {
+            let script = self.pending_scripts.remove(0);
+            if self.scripts.contains_key(&script.script_path) {
+                continue;
+            }
+            self.compile_file(&script.script_path, vm, id_creator);
+        }
     }
 
     /// C++ `BoyiaCompileInfo::compileFile`: skip if path seen, read file, `compile`, restore previous path/id.
