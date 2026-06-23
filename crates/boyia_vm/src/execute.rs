@@ -121,31 +121,6 @@ unsafe fn get_capture_ptr(vm: &mut BoyiaVM, capture_idx: LIntPtr) -> *mut BoyiaV
     (*fun).mParams.add(base + capture_idx as usize)
 }
 
-unsafe fn find_local_by_name_key_in_current_frame(vm: &mut BoyiaVM, key: LUintPtr) -> *mut BoyiaValue {
-    if vm.mEState.is_null() {
-        return ptr::null_mut();
-    }
-    let e = vm.mEState;
-    if (*e).mFrameIndex <= 0 {
-        return ptr::null_mut();
-    }
-    let fi = (*e).mFrameIndex as usize - 1;
-    let start = (*e).mExecStack[fi].mLValSize as usize;
-    let end = (*e).mStackFrame.mLValSize as usize;
-    if end <= start {
-        return ptr::null_mut();
-    }
-    let mut idx = end;
-    while idx > start {
-        idx -= 1;
-        let slot = (*e).mLocals.as_mut_ptr().add(idx);
-        if (*slot).mNameKey == key {
-            return slot;
-        }
-    }
-    ptr::null_mut()
-}
-
 /// Get pointer to BoyiaValue for REG0, REG1, VAR, or LOCAL operand. Returns null for constant operands.
 #[inline]
 unsafe fn get_op_value(inst: &Instruction, side: OpSide, vm: &mut BoyiaVM) -> *mut BoyiaValue {
