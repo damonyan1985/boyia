@@ -12,7 +12,8 @@ use boyia_builtins::{
 use boyia_vm::{
     cache_vm_code, consume_micro_task, delete_data, execute_global_code,
     free_memory_pool, get_runtime_from_vm, init_memory_pool, init_vm_boxed, new_data, vm_from_void,
-    CompileArgs, BoyiaFunction, BoyiaStr, BoyiaVM, BoyiaValue, CompileFunction, CompileNativeFunction,
+    CompileArg, CompileArgs, BoyiaFunction, BoyiaStr, BoyiaVM, BoyiaValue, CompileFunction,
+    CompileNativeFunction,
     Global, GlobalList, K_BOYIA_NULL, LInt, LUintPtr, LVoid, NativeFunction, NativePtr,
     OpHandleResult, OpOffset, Runtime, ValueType,
 };
@@ -381,13 +382,13 @@ impl Runtime for BoyiaRuntime {
         -1
     }
 
-    fn call_compile_function(&self, idx: LInt, args: &CompileArgs) -> bool {
+    fn call_compile_function(&self, idx: LInt, args: &CompileArgs) -> CompileArg {
         if idx < 0 || idx as usize >= self.compile_fun_table.len() {
-            return false;
+            return CompileArg::Void;
         }
         let cf = &self.compile_fun_table[idx as usize];
         if cf.mAddr as *const () == sentinel_compile_native as *const () {
-            return false;
+            return CompileArg::Void;
         }
         unsafe { (cf.mAddr)(args) }
     }
@@ -520,6 +521,6 @@ unsafe fn sentinel_native(_vm: &mut BoyiaVM) -> OpHandleResult {
 }
 
 /// Sentinel: end of compile-time function table.
-unsafe fn sentinel_compile_native(_args: &CompileArgs) -> bool {
-    false
+unsafe fn sentinel_compile_native(_args: &CompileArgs) -> CompileArg {
+    CompileArg::Void
 }

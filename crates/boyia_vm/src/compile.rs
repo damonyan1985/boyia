@@ -623,6 +623,64 @@ unsafe fn add_string_from_token(cs: &mut CompileState) -> Option<usize> {
     })
 }
 
+/// Add a string literal to the VM string table; return index.
+unsafe fn add_string_literal(vm: &mut BoyiaVM, content: &str) -> Option<usize> {
+    let st = &mut vm.mStrTable;
+    let len = content.len();
+    let alloc_len = if len > 0 { len } else { 1 };
+    let layout = std::alloc::Layout::array::<LInt8>(alloc_len + 1).ok()?;
+    let ptr = std::alloc::alloc(layout) as *mut LInt8;
+    if ptr.is_null() {
+        return None;
+    }
+    if len > 0 {
+        std::ptr::copy_nonoverlapping(content.as_ptr(), ptr as *mut u8, len);
+    }
+    *ptr.add(len) = 0;
+    st.push_str(BoyiaStr {
+        mPtr: ptr,
+        mLen: len as LInt,
+    })
+}
+
+/// Emit a compile-time constant into `reg0` (same bytecode as [atom] for literals).
+unsafe fn emit_compile_arg_to_reg0(cs: &mut CompileState, arg: CompileArg) {
+    match arg {
+        CompileArg::Void => {}
+        CompileArg::Int(n) => {
+            let _ = cs.put_instruction(
+                OpCommand::reg0(),
+                OpCommand::const_number(n),
+                CmdType::kCmdAssign,
+            );
+        }
+        CompileArg::Real(r) => {
+            let _ = cs.put_instruction(
+                OpCommand::reg0(),
+                OpCommand::const_real(r),
+                CmdType::kCmdAssign,
+            );
+        }
+        CompileArg::Bool(b) => {
+            let n = if b { LTrue as LIntPtr } else { LFalse as LIntPtr };
+            let _ = cs.put_instruction(
+                OpCommand::reg0(),
+                OpCommand::const_number(n),
+                CmdType::kCmdAssign,
+            );
+        }
+        CompileArg::Str(s) => {
+            if let Some(str_idx) = add_string_literal(cs.mVm, &s) {
+                let _ = cs.put_instruction(
+                    OpCommand::const_number(str_idx as LIntPtr),
+                    OpCommand::none(),
+                    CmdType::kCmdConstStr,
+                );
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Declare global (for GlobalStatement) and create_fun_val (for Fun/Class)
 // ---------------------------------------------------------------------------
@@ -760,10 +818,11 @@ unsafe fn parse_compile_args(cs: &mut CompileState) -> CompileArgs {
     args
 }
 
-/// Dispatch a compile-time function call (no bytecode emitted).
+/// Dispatch a compile-time function call; emit its constant result into `reg0` when non-void.
 unsafe fn call_compile_function_statement(cs: &mut CompileState, idx: LInt) {
     let args = parse_compile_args(cs);
-    let _ = crate::core::call_compile_function(cs.mVm, idx, &args);
+    let result = crate::core::call_compile_function(cs.mVm, idx, &args);
+    emit_compile_arg_to_reg0(cs, result);
 }
 
 /// PushArgStatement(needPushFunction, cs) per BoyiaCore.cpp: if needPushFunction { ++argCount; PutInstruction PushArg; NextToken; if RPTR Assign(argCount) return; Putback; } do { EvalExpression; PutInstruction PushArg; ++argCount; } while (COMMA); PutInstruction Assign(argCount).

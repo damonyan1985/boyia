@@ -48,9 +48,9 @@ pub trait Runtime {
     fn find_compile_func(&self, _key: LUintPtr) -> LInt {
         -1
     }
-    /// Call compile-time function by index with parsed [CompileArgs]; returns true if handled.
-    fn call_compile_function(&self, _idx: LInt, _args: &CompileArgs) -> bool {
-        false
+    /// Call compile-time function by index with parsed [CompileArgs]; returns its compile-time result.
+    fn call_compile_function(&self, _idx: LInt, _args: &CompileArgs) -> CompileArg {
+        CompileArg::Void
     }
 
     /// Enqueue an already-resolved script path for deferred compilation (compile-time `require`).
@@ -1027,9 +1027,11 @@ pub struct NativeFunction {
 // Compile-time functions (resolved while compiling, e.g. `require`)
 // ---------------------------------------------------------------------------
 
-/// A single argument to a compile-time function. Literals only (string/int/real/bool).
+/// A compile-time constant value (argument or return). Literals only (string/int/real/bool).
+/// [CompileArg::Void] means no value to emit into `reg0` (e.g. compile-time `require`).
 #[derive(Clone, Debug)]
 pub enum CompileArg {
+    Void,
     Str(String),
     Int(LIntPtr),
     Real(LReal64),
@@ -1105,8 +1107,8 @@ impl CompileArgs {
     }
 }
 
-/// Compile-time function pointer: handles a call during compilation. Returns true if handled.
-pub type CompileFunction = unsafe fn(&CompileArgs) -> bool;
+/// Compile-time function pointer: handles a call during compilation and returns a constant result.
+pub type CompileFunction = unsafe fn(&CompileArgs) -> CompileArg;
 
 /// Compile-time function table entry (mirrors [NativeFunction]).
 pub struct CompileNativeFunction {

@@ -952,15 +952,15 @@ pub(crate) unsafe fn find_compile_func(vm: &mut BoyiaVM, key: LUintPtr) -> LInt 
     (*rt).find_compile_func(key)
 }
 
-/// Call compile-time function by index with parsed [crate::CompileArgs]. Returns true if handled.
+/// Call compile-time function by index with parsed [crate::CompileArgs].
 pub(crate) unsafe fn call_compile_function(
     vm: &mut BoyiaVM,
     idx: LInt,
     args: &crate::CompileArgs,
-) -> bool {
+) -> crate::CompileArg {
     let rt = get_runtime_from_vm(vm);
     if rt.is_null() {
-        return false;
+        return crate::CompileArg::Void;
     }
     (*rt).call_compile_function(idx, args)
 }
