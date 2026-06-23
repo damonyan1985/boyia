@@ -214,7 +214,8 @@ impl BoyiaRuntime {
     }
 
     /// Compile script source into the VM (`BoyiaCompileInfo::compile` / `CompileCode`).
-    /// Compile-time `require` enqueues dependencies; they are compiled after the entry finishes.
+    /// Compile-time `require` is resolved via a post-order DFS: dependencies compile before the
+    /// entry, and a module's own dependencies compile before it (children-first execution order).
     pub fn compile(&mut self, script: &str) {
         let BoyiaRuntime {
             compile_info,
@@ -223,16 +224,7 @@ impl BoyiaRuntime {
             ..
         } = self;
         if let Some(vm) = vm.as_deref_mut() {
-            let entry_start = vm.entry_len();
-            compile_info.compile_string(script, vm);
-            let entry_end = vm.entry_len();
-            compile_info.drain_pending_scripts(vm, id_creator);
-            // Run dependencies before the entry: move the entry's own chain(s) to the end.
-            if vm.entry_len() > entry_end {
-                for _ in entry_start..entry_end {
-                    vm.move_entry_to_end(entry_start);
-                }
-            }
+            compile_info.compile_entry(script, vm, id_creator);
         }
     }
 
@@ -401,8 +393,7 @@ impl Runtime for BoyiaRuntime {
     }
 
     fn enqueue_compile_script(&mut self, resolved_path: &str) {
-        self.compile_info
-            .enqueue_script(resolved_path, &mut self.id_creator);
+        self.compile_info.enqueue_script(resolved_path);
     }
 
     fn gen_identifier(&mut self, key: &str) -> LUintPtr {

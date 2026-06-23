@@ -58,8 +58,9 @@ pub(crate) struct BoyiaCompileInfo {
     scripts: HashMap<String, Script>,
     /// Script currently being compiled (`compile_file`); moved into [scripts] when done.
     current_script: Option<Script>,
-    /// Scripts discovered via compile-time `require`, not yet compiled (FIFO).
-    pending_scripts: Vec<Script>,
+    /// Resolved `require` paths discovered while compiling the file currently in `compile_string`.
+    /// Consumed right after each `compile_string` to drive a post-order DFS over dependencies.
+    pending_requires: Vec<String>,
     /// Rust CLI: when no [current_script], `BY_Require` resolves relative to this entry file.
     entry_script_path: String,
 }
@@ -69,7 +70,7 @@ impl BoyiaCompileInfo {
         Self {
             scripts: HashMap::new(),
             current_script: None,
-            pending_scripts: Vec::new(),
+            pending_requires: Vec::new(),
             entry_script_path: String::new(),
         }
     }
@@ -131,46 +132,40 @@ impl BoyiaCompileInfo {
             .unwrap_or_else(|_| path.to_string())
     }
 
-    /// True when `path` is already compiled, pending, currently compiling, or the entry.
-    fn is_script_known(&self, path: &str) -> bool {
-        self.scripts.contains_key(path)
-            || self.entry_script_path == path
-            || self.pending_scripts.iter().any(|s| s.script_path == path)
-            || self
-                .current_script
-                .as_ref()
-                .is_some_and(|s| s.script_path == path)
-    }
-
-    /// Compile-time `require`: enqueue an already-resolved script path for later compilation.
-    /// Does not compile or execute now (see [drain_pending_scripts]).
-    pub(crate) fn enqueue_script(&mut self, resolved_path: &str, id_creator: &mut IdCreator) {
-        let dedup_key = Self::canonical_path(resolved_path);
-        if self.is_script_known(&dedup_key) {
+    /// Compile-time `require`: record an already-resolved dependency path for the file being compiled.
+    /// Compilation is driven later by the post-order DFS in [compile_entry] / [compile_file].
+    pub(crate) fn enqueue_script(&mut self, resolved_path: &str) {
+        let key = Self::canonical_path(resolved_path);
+        if self.scripts.contains_key(&key) || key == self.entry_script_path {
             return;
         }
-        let script_id = id_creator.gen_ident_by_str(&dedup_key);
-        self.pending_scripts
-            .push(Script::new(dedup_key, script_id, kInvalidInstruction));
-    }
-
-    /// Compile all queued scripts (FIFO). Each compile may enqueue more requires.
-    pub(crate) fn drain_pending_scripts(&mut self, vm: &mut BoyiaVM, id_creator: &mut IdCreator) {
-        while !self.pending_scripts.is_empty() {
-            let script = self.pending_scripts.remove(0);
-            if self.scripts.contains_key(&script.script_path) {
-                continue;
-            }
-            self.compile_file(&script.script_path, vm, id_creator);
+        if self.pending_requires.iter().any(|p| *p == key) {
+            return;
         }
+        self.pending_requires.push(key);
     }
 
-    /// C++ `BoyiaCompileInfo::compileFile`: skip if path seen, read file, `compile`, restore previous path/id.
-    pub fn compile_file(&mut self, path: &str, vm: &mut BoyiaVM, id_creator: &mut IdCreator) {
-        let dedup_key = std::fs::canonicalize(Path::new(path))
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| path.to_string());
+    /// Compile the entry source, then its `require` graph in post-order (dependencies first),
+    /// leaving the entry's own global chain(s) last in `mEntry`.
+    pub fn compile_entry(&mut self, script: &str, vm: &mut BoyiaVM, id_creator: &mut IdCreator) {
+        let entry_start = vm.entry_len();
+        // Entry has no `current_script`; its requires resolve relative to `entry_script_path`.
+        self.compile_string(script, vm);
+        let entry_end = vm.entry_len();
 
+        let requires = std::mem::take(&mut self.pending_requires);
+        for dep in requires {
+            self.compile_file(&dep, vm, id_creator);
+        }
+
+        // Dependencies are now appended after the entry; move the entry's chain(s) to the end.
+        vm.move_entries_to_end(entry_start, entry_end);
+    }
+
+    /// Compile `path` and its transitive `require`s in post-order (children before parent).
+    /// After this returns, the file's own global chain(s) sit after all of its dependencies'.
+    pub fn compile_file(&mut self, path: &str, vm: &mut BoyiaVM, id_creator: &mut IdCreator) {
+        let dedup_key = Self::canonical_path(path);
         if self.scripts.contains_key(&dedup_key) {
             return;
         }
@@ -193,24 +188,34 @@ impl BoyiaCompileInfo {
 
         let script_id = id_creator.gen_ident_by_str(&dedup_key);
         let code_start = vm.vm_code().len() as OpOffset;
+        let entry_start = vm.entry_len();
         self.current_script = Some(Script::new(dedup_key.clone(), script_id, code_start));
 
         self.compile_string(&source, vm);
 
+        let entry_end = vm.entry_len();
         let code_len = vm.vm_code().len();
         let code_end = if code_len > code_start as usize {
             (code_len - 1) as OpOffset
         } else {
             kInvalidInstruction
         };
-        if let Some(script) = self.current_script.as_mut() {
+        // Finalize and record this file before recursing, so cyclic requires terminate.
+        if let Some(mut script) = self.current_script.take() {
             script.code_end = code_end;
-        }
-        if let Some(script) = self.current_script.take() {
             self.scripts.insert(dedup_key, script);
         }
-
+        // Take this file's own requires; restore parent's compile context before recursing.
+        let requires = std::mem::take(&mut self.pending_requires);
         self.current_script = saved_script;
+
+        // DFS: compile dependencies (their chains append after this file's).
+        for dep in requires {
+            self.compile_file(&dep, vm, id_creator);
+        }
+
+        // Post-order: move this file's own chain(s) after its dependencies'.
+        vm.move_entries_to_end(entry_start, entry_end);
     }
 }
 

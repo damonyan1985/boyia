@@ -893,12 +893,15 @@ impl VMEntryTable {
         true
     }
 
-    /// Move the entry at `index` to the end (used to run dependencies before the entry script).
-    pub fn move_to_end(&mut self, index: usize) {
-        if index < self.mTable.len() {
-            let v = self.mTable.remove(index);
-            self.mTable.push(v);
+    /// Move the entries in `[start, end)` to the end, preserving their order.
+    /// Used to run dependency entries before the entry script's own entries.
+    /// No-op when the range is empty/invalid or already at the end.
+    pub fn move_range_to_end(&mut self, start: usize, end: usize) {
+        if start >= end || end > self.mTable.len() {
+            return;
         }
+        let moved: Vec<LInt> = self.mTable.drain(start..end).collect();
+        self.mTable.extend(moved);
     }
 
     /// Replace all entries from a raw buffer (used by `load_entry_table`).
@@ -995,10 +998,10 @@ impl BoyiaVM {
         self.mEntry.len()
     }
 
-    /// Move the entry chain at `index` to the end (run dependencies before the entry script).
+    /// Move the entry chains in `[start, end)` to the end (run dependencies before the entry script).
     #[inline]
-    pub fn move_entry_to_end(&mut self, index: usize) {
-        self.mEntry.move_to_end(index);
+    pub fn move_entries_to_end(&mut self, start: usize, end: usize) {
+        self.mEntry.move_range_to_end(start, end);
     }
 }
 

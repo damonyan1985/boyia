@@ -50,12 +50,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let script = std::fs::read_to_string(&script_path).unwrap_or_else(|e| {
-        eprintln!("Error: failed to read {}: {e}", script_path.display());
-        std::process::exit(1);
-    });
-
-    if let Err(e) = runner.compile(&script, Some(&script_path)) {
+    if let Err(e) = runner.compile_file(&script_path) {
         eprintln!("Error: compile failed: {e:?}");
         std::process::exit(1);
     }
