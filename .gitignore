@@ -4,3 +4,4 @@ node_modules/
 dist/
 Cargo.lock
 boyia_cli_demo.txt
+.DS_Store

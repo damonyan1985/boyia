@@ -107,8 +107,8 @@ fn resolve_require_path(base: &str, rel: &str) -> String {
 }
 
 /// Compile-time `require("...")` (registered in the runtime compile-function table).
-/// Resolves the path against the current script base and enqueues it into `pending_scripts`;
-/// the dependency is compiled later (after the current file), not compiled or executed now.
+/// Resolves the path against the current script base and enqueues it into `pending_requires`;
+/// the dependency is compiled later via post-order DFS, not compiled or executed at the call site.
 pub unsafe fn require_file_compile(args: &CompileArgs) -> CompileArg {
     let vm_ptr = args.vm();
     if vm_ptr.is_null() {

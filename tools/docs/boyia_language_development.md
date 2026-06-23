@@ -115,7 +115,68 @@ class AppLogger extends BaseLogger {
 require("./util/util.boyia");
 ```
 
-运行时会基于**当前脚本文件**所在目录解析相对路径并编译加载目标脚本。VS Code 扩展中对 `require` 字符串提供跳转与文档链接。
+路径相对于**当前被编译脚本文件**所在目录解析（绝对路径按平台规则直接 canonicalize）。VS Code 扩展中对 `require` 字符串提供跳转与文档链接。
+
+### 5.1 编译与执行两阶段（CLI）
+
+`boyia_cli` 把两件事分开做：
+
+1. **编译**：读入口脚本，以及它 `require` 到的所有文件，把它们翻译成 VM 能执行的指令；**此阶段不运行**脚本里的 `BY_Log`、赋值等顶层语句。
+2. **执行**：按约定好的顺序，依次运行每个文件顶层的代码（类定义、全局变量等）。
+
+```bash
+cd examples/boyia_cli
+cargo run    # 内部顺序：先编译全部文件，再统一执行
+```
+
+自己嵌入 VM 时，也应先编完所有相关文件，再开始执行。
+
+### 5.2 字面量 require（编译期处理）
+
+写法固定为 `require("路径")`，路径必须是**写在引号里的字符串**，不能是变量：
+
+```boyia
+require("./util/util.boyia");
+```
+
+这种写法在**编译当前文件时**就会处理，不会在运行时再调一次 `require` 函数。具体会做两件事：
+
+1. **记下依赖**：根据当前文件位置，算出 `./util/util.boyia` 的绝对路径，加入「待编译文件列表」。
+2. **稍后一起编**：当前文件编完后，再按依赖关系去编列表里的文件——**被 require 的文件会先编、先执行**，引用它的文件后编、后执行。入口 `main.boyia` 通常最后执行。
+
+因此脚本里写 `require("./util/util.boyia")` 时，并不会立刻运行 `util.boyia` 里的代码；要等整个工程编译完，进入执行阶段后，才会按上面的顺序跑起来。
+
+**常见情况：**
+
+| 情况 | 说明 |
+|------|------|
+| A require B，B require C | 执行顺序大致为 C → B → A（先底层，后上层） |
+| 多个文件 require 同一个 util | util 只编译、只执行一次 |
+| 文件互相 require（循环） | 不会无限编译；但环里谁先谁后不保证，应避免顶层代码互相依赖 |
+| `require(变量)` | 见下一节，走运行时逻辑 |
+
+### 5.3 动态 require（运行时处理）
+
+路径来自变量或表达式时，只能在**程序已经跑起来之后**再加载：
+
+```boyia
+var path = "./util/util.boyia";
+require(path);
+```
+
+此时会：**当场**读取路径 → 编译该文件（及其依赖）→ **马上执行**新编出来的顶层代码，以便后面的语句能用到新注册的类或函数。
+
+已打包成 bundle / exe、不再从磁盘读源码时，运行时的 `require` 会被忽略。
+
+### 5.4 路径相对谁算？
+
+| 什么时候 | 相对路径基于 |
+|----------|----------------|
+| 编译某个 `.boyia` 文件时的 `require("...")` | **这个文件**所在目录 |
+| CLI 指定的入口脚本 | 入口文件的目录（启动时登记） |
+| 运行时的 `require(变量)` | 当前上下文或入口脚本目录 |
+
+注意：`File.read("a.txt")` 等 API 默认相对**进程当前工作目录**，和 `require` 规则不同；需要时可 `OS.chdir` 改工作目录。
 
 ## 6. Builtins 编写（Rust 侧）
 
@@ -159,6 +220,8 @@ cargo run -- --help
 3. `.boyia_rc` 内容：`script=path/to/entry.boyia`（也支持 `entry=`、`main=`）
 
 `File.*` 等使用相对路径的 builtin 以**进程 cwd** 为准；可用 `OS.cwd()` / `OS.chdir(path)` 调整工作目录。
+
+CLI 启动流程：`BoyiaRunner::compile_file` 编译入口及 `require` 依赖图 → `run_exe_file` 执行全局 entry（见 [§5 require 与模块加载](#5-require-与模块加载)）。
 
 ### 6.1 推荐写法：`#[boyia_class]` 宏
 
@@ -450,40 +513,104 @@ pub unsafe fn builtin_async_xxx(vm: *mut LVoid) -> OpHandleResult {
 
 ## 7. Rust 原生扩展函数（参照 boyia_lib）
 
-`boyia_lib` 提供了标准 native 函数注册样例，例如：
+`boyia_lib` 里注册了脚本最常用的几个底层能力：
 
-- `create_object`（对应脚本 `new(...)`）
-- `log_print`（对应脚本 `BY_Log(...)`）
-- `require_file`（对应脚本 `require(...)`）
+| 脚本里写的 | 何时生效 | Rust 实现 | 作用 |
+|------------|----------|-----------|------|
+| `new(类)` | 运行时 | `create_object` | 创建对象，把结果交给表达式 |
+| `BY_Log(...)` | 运行时 | `log_print` | 打印，无返回值 |
+| `require("...")` | **编译时** | `require_file_compile` | 记下还要编译哪个文件（见 §5.2） |
+| `require(变量)` | 运行时 | `require_file` | 当场编译并执行该文件（见 §5.3） |
 
-### 7.1 函数签名
+下面分「运行时函数」和「编译时函数」说明扩展方式。
 
-native 函数通常形如：
+### 7.1 运行时函数（Native）
+
+脚本执行到调用时才会进入 Rust，签名一般为：
 
 ```rust
-pub unsafe fn your_native(vm: *mut LVoid) -> OpHandleResult
+pub unsafe fn your_native(vm: &mut BoyiaVM) -> OpHandleResult
 ```
 
-### 7.2 读取参数
+**怎么把结果还给脚本？** VM **不会**自动帮你填返回值。若函数要参与表达式（例如 `var x = foo()`），需在 Rust 里显式写入表达式结果槽：
 
-通过 VM API 读取 local 参数：
+- `set_native_result(&mut value, vm)` — 写入任意 Boyia 值
+- `set_int_result(n, vm)` — 写入整数
 
-- `get_local_size(vm)`：参数个数
-- `get_local_value(index, vm)`：指定参数
+只做事、不返回值的函数（如 `BY_Log`）可以不写。若在表达式里调用了这类函数，返回值不可信。
 
-### 7.3 注册到 Runtime
+**怎么读参数？**
 
-可参考 `boyia_runtime` 的 native 初始化逻辑，将函数加入 native 表：
+- `get_local_size(vm)` — 参数个数
+- `get_local_value(index, vm)` — 第几个参数（`require_file` 的路径在 index 0）
+
+**注册：**
 
 ```rust
 self.append_native("yourFunc", your_native as NativePtr);
 ```
 
-脚本侧即可直接调用：
+### 7.2 编译时函数（CompileFunction）
 
-```boyia
-yourFunc(...);
+这类函数在**翻译脚本、生成指令**的阶段执行，程序还没开始跑。
+
+可以做两类事：
+
+1. **编译时算出常量**  
+   例如 `myDouble(21)` 在编译阶段就算成 `42`，生成的指令里直接是数字 `42`，运行时不再调用 `myDouble`。
+
+2. **编译时登记后续工作**  
+   例如字面量 `require("./a.boyia")`：此时**不执行** `a.boyia`，只把「这个文件也要参与本次编译」记下来，等当前文件编完再去编它（详见 §5.2）。  
+   以前文档里说的「编译副作用」，指的就是这种：**在编译阶段改变「还要编哪些文件」等状态，而不是给表达式一个可用的值**。
+
+编译时函数的 Rust 签名：
+
+```rust
+pub type CompileFunction = unsafe fn(&CompileArgs) -> CompileArg;
 ```
+
+- **参数** `CompileArgs`：只能是字面量（字符串、整数、浮点、`true`/`false`），并带上 VM 指针以便访问 Runtime。
+- **返回值** `CompileArg`：告诉编译器「表达式这边应该当成什么常量」。
+
+| 返回值 | 含义 | 编译器生成的代码 |
+|--------|------|------------------|
+| `Void` | 没有表达式结果（如 `require` 只登记文件） | 不生成赋值指令 |
+| `Int` / `Real` / `Bool` | 数值或布尔常量 | 把常量写入表达式结果槽 |
+| `Str` | 字符串常量 | 生成取字符串常量的指令 |
+
+**注册：**
+
+```rust
+self.append_compile_native("myDouble", my_double_compile as CompileFunction);
+```
+
+**示例：编译时把参数乘 2**
+
+```rust
+use boyia_vm::{CompileArg, CompileArgs};
+
+pub unsafe fn my_double_compile(args: &CompileArgs) -> CompileArg {
+    let Some(n) = args.int(0) else {
+        return CompileArg::Void;
+    };
+    CompileArg::Int(n * 2)
+}
+```
+
+脚本写 `var x = myDouble(21);` 时，效果接近直接写 `var x = 42;`。
+
+**`require` 的编译时实现** `require_file_compile` 返回 `Void`：只登记路径，不向表达式提供值，也不生成运行时的 `require` 调用。
+
+编译器遇到标识符时，**先查编译时函数表，再查运行时函数表**；同名时编译时版本优先（所以 `require("...")` 不会变成运行时 `require`）。
+
+### 7.3 给 Runtime 加能力时要动哪里
+
+扩展编译时 `require` 或自定义编译时函数时，通常会用到：
+
+- `Runtime::enqueue_compile_script` — 把「待编译文件路径」登记进去（`require` 用这个）
+- `BoyiaCompileInfo`（`boyia_runtime/src/info.rs`）— 记录已编文件、待编列表，并决定「先编依赖、后编引用方」的顺序
+
+实现细节（函数表名、`pending_requires`、`move_entries_to_end` 等）见源码注释，日常使用脚本一般不必关心。
 
 ## 8. async/await 机制
 
