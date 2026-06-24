@@ -16,6 +16,15 @@ impl OsBuiltins {
             .unwrap_or_default()
     }
 
+    /// User home directory (`$HOME` on Unix, `%USERPROFILE%` on Windows).
+    #[boyia_sync_builtin(method = "home")]
+    fn os_home() -> String {
+        env::var_os("HOME")
+            .or_else(|| env::var_os("USERPROFILE"))
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
     #[boyia_sync_builtin(method = "chdir")]
     fn os_chdir(path: String) -> bool {
         env::set_current_dir(path).is_ok()
