@@ -923,6 +923,53 @@ fn expand_class(class_config: &ClassConfig, imp: &ItemImpl) -> syn::Result<proc_
 // `#[boyia_native_object]` — struct fields in `Box<T>` with vtable GC (`nativePtr`)
 // ---------------------------------------------------------------------------
 
+struct BoyiaFieldAttr {
+    skip: bool,
+    init: Option<Expr>,
+}
+
+fn parse_boyia_field(attrs: &[Attribute]) -> syn::Result<Option<BoyiaFieldAttr>> {
+    for attr in attrs {
+        if !attr.path().is_ident("boyia_field") {
+            continue;
+        }
+        let mut skip = false;
+        let mut init = None;
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("skip") {
+                skip = true;
+                Ok(())
+            } else if meta.path.is_ident("init") {
+                let value: LitStr = meta.value()?.parse()?;
+                init = Some(syn::parse_str(&value.value())?);
+                Ok(())
+            } else {
+                Err(meta.error(
+                    "unknown `#[boyia_field(...)]` key; use `skip` and/or `init = \"expr\"`",
+                ))
+            }
+        })?;
+        if !skip && init.is_none() {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "`#[boyia_field]` requires `skip` and/or `init = \"expr\"`",
+            ));
+        }
+        return Ok(Some(BoyiaFieldAttr { skip, init }));
+    }
+    Ok(None)
+}
+
+fn is_option_type(ty: &Type) -> bool {
+    let Type::Path(TypePath { path, .. }) = ty else {
+        return false;
+    };
+    path.segments
+        .last()
+        .map(|seg| seg.ident == "Option")
+        .unwrap_or(false)
+}
+
 fn parse_field_default(attrs: &[Attribute]) -> Option<String> {
     for attr in attrs {
         let is_default = attr.path().is_ident("boyia_field_default");
@@ -945,8 +992,24 @@ fn field_default_init(field: &Field) -> syn::Result<proc_macro2::TokenStream> {
     let name = field.ident.as_ref().ok_or_else(|| {
         syn::Error::new_spanned(field, "tuple struct fields are not supported by `#[boyia_native_object]`")
     })?;
-    let default_lit = parse_field_default(&field.attrs);
     let ty = &field.ty;
+
+    if let Some(BoyiaFieldAttr { skip, init }) = parse_boyia_field(&field.attrs)? {
+        if let Some(expr) = init {
+            return Ok(quote! { #name: #expr, });
+        }
+        if skip {
+            if is_option_type(ty) {
+                return Ok(quote! { #name: None, });
+            }
+            return Err(syn::Error::new_spanned(
+                field,
+                "`#[boyia_field(skip)]` on non-`Option` fields requires `init = \"expr\"`",
+            ));
+        }
+    }
+
+    let default_lit = parse_field_default(&field.attrs);
     let type_name = type_last_ident(ty).unwrap_or_default();
 
     let init = match type_name.as_str() {
@@ -975,7 +1038,8 @@ fn field_default_init(field: &Field) -> syn::Result<proc_macro2::TokenStream> {
                 ty,
                 format!(
                     "unsupported field type `{other}` in `#[boyia_native_object]`; \
-                     use bool, integer types, float types, or String"
+                     use bool, integer types, float types, String, \
+                     `#[boyia_field(skip)]`, or `#[boyia_field(init = \"...\")]`"
                 ),
             ));
         }
@@ -1012,7 +1076,9 @@ fn expand_boyia_native_object(item: &ItemStruct) -> syn::Result<proc_macro2::Tok
     struct_item.attrs.push(syn::parse_quote! { #[repr(C)] });
 
     for field in struct_item.fields.iter_mut() {
-        field.attrs.retain(|a| !a.path().is_ident("boyia_field_default"));
+        field.attrs.retain(|a| {
+            !a.path().is_ident("boyia_field_default") && !a.path().is_ident("boyia_field")
+        });
     }
 
     let hdr_field: Field = syn::parse_quote! {
@@ -1063,6 +1129,14 @@ fn expand_boyia_native_object(item: &ItemStruct) -> syn::Result<proc_macro2::Tok
 ///     #[boyia_field_default = "false"]
 ///     debug: bool,
 ///     timeout_ms: u64,
+/// }
+///
+/// #[boyia_native_object]
+/// struct WebSocketServerBuiltins {
+///     #[boyia_field_default = "0"]
+///     port: u64,
+///     #[boyia_field(skip)]
+///     runtime: Option<ServerRuntime>,
 /// }
 /// ```
 #[proc_macro_attribute]

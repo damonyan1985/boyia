@@ -930,7 +930,7 @@ unsafe fn handle_relational(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandl
         return OpHandleResult::kOpResultEnd;
     }
     let result = match (*inst).mOPCode {
-        CmdType::kCmdNotRelation => (*right).mValue.mIntVal != 0,
+        CmdType::kCmdNotRelation => (*right).mValue.mIntVal == 0,
         CmdType::kCmdLtRelation => get_boyia_number(left) < get_boyia_number(right),
         CmdType::kCmdLeRelation => get_boyia_number(left) <= get_boyia_number(right),
         CmdType::kCmdGtRelation => get_boyia_number(left) > get_boyia_number(right),

@@ -19,13 +19,11 @@ pub unsafe fn create_object(vm: &mut BoyiaVM) -> OpHandleResult {
 
 /// BY_Log: local0 = value; print int or string to stdout.
 pub unsafe fn log_print(vm: &mut BoyiaVM) -> OpHandleResult {
-    eprintln!("[log_print] called");
     let val = get_local_value(0, vm) as *const BoyiaValue;
     if val.is_null() {
         return OpHandleResult::kOpResultEnd;
     }
 
-    eprintln!("[log_print] called : {}", (*val).mValueType as i32);
     match (*val).mValueType {
         ValueType::BY_INT => {
             println!("Boyia [info]: {}", (*val).mValue.mIntVal);

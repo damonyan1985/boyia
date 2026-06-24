@@ -8,6 +8,7 @@ use crate::runner::BuiltinRegistrar;
 
 pub const DEFAULT_BUILTINS: &[BuiltinRegistrar] = &[
     external::config::builtin_config_class,
+    external::ws_server::builtin_websocket_server_class,
     utility::https::builtin_https_class,
     utility::file::builtin_file_class,
     utility::os::builtin_os_class,

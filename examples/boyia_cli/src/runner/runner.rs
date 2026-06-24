@@ -125,7 +125,7 @@ impl BoyiaRunner {
 
 impl Drop for BoyiaRunner {
     fn drop(&mut self) {
-        std::thread::sleep(std::time::Duration::from_secs(10));
+        std::thread::sleep(std::time::Duration::from_secs(20));
 
         if let Some(thread_pool) = self.thread_pool.take() {
             let _ = thread_pool.stop();

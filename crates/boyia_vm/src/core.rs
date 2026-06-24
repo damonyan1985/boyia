@@ -1140,8 +1140,15 @@ pub unsafe fn compare_value(src: *const BoyiaValue, dest: *const BoyiaValue) -> 
                 return false;
             }
             let len = (*a).mLen.max(0) as usize;
-            std::slice::from_raw_parts((*a).mPtr as *const u8, len)
-                == std::slice::from_raw_parts((*b).mPtr as *const u8, len)
+            if len == 0 {
+                return true;
+            }
+            let ptr_a = (*a).mPtr as *const u8;
+            let ptr_b = (*b).mPtr as *const u8;
+            if ptr_a.is_null() || ptr_b.is_null() {
+                return false;
+            }
+            std::slice::from_raw_parts(ptr_a, len) == std::slice::from_raw_parts(ptr_b, len)
         }
         _ => false,
     }
