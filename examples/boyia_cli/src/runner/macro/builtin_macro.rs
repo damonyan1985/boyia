@@ -433,6 +433,63 @@ fn is_json_value_type(ty: &Type) -> bool {
             .is_some_and(|seg| seg.ident == "serde_json")
 }
 
+fn parse_sync_tuple_return(ty: &Type) -> Option<Vec<Type>> {
+    let Type::Tuple(t) = ty else {
+        return None;
+    };
+    if t.elems.is_empty() || t.elems.len() > 4 {
+        return None;
+    }
+    Some(t.elems.iter().cloned().collect())
+}
+
+fn is_sync_callback_arg_type(ty: &Type) -> bool {
+    matches!(
+        type_last_ident(ty).as_deref(),
+        Some("bool" | "String" | "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" | "f32" | "f64")
+    )
+}
+
+fn callback_arg_push(elem_ty: &Type, var: &syn::Ident) -> syn::Result<proc_macro2::TokenStream> {
+    let push = match type_last_ident(elem_ty).as_deref() {
+        Some("String") => quote! {
+            crate::runner::builtin_sync::push_callback_string(#var, site.vm())
+        },
+        Some("bool") => quote! {
+            crate::runner::builtin_sync::push_callback_bool(#var, site.vm())
+        },
+        Some("f32") => quote! {
+            crate::runner::builtin_sync::push_callback_f64(#var as f64, site.vm())
+        },
+        Some("f64") => quote! {
+            crate::runner::builtin_sync::push_callback_f64(#var, site.vm())
+        },
+        Some("i8" | "i16" | "i32" | "i64" | "isize") => quote! {
+            crate::runner::builtin_sync::push_callback_int(#var as i64, site.vm())
+        },
+        Some("u8" | "u16" | "u32" | "u64" | "usize") => quote! {
+            crate::runner::builtin_sync::push_callback_int(#var as i64, site.vm())
+        },
+        Some(other) => {
+            return Err(syn::Error::new_spanned(
+                elem_ty,
+                format!(
+                    "unsupported tuple callback arg type `{other}`; use bool, String, integer, or float"
+                ),
+            ));
+        }
+        None => {
+            return Err(syn::Error::new_spanned(
+                elem_ty,
+                "unsupported tuple callback arg type",
+            ));
+        }
+    };
+    Ok(quote! {
+        __callback_args.push(crate::some_or_end!(#push));
+    })
+}
+
 fn async_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> {
     let name = &arg.name;
     let index = arg.index as i32;
@@ -595,6 +652,17 @@ fn validate_sync_return(ty: &Type) -> syn::Result<()> {
     if matches!(ty, Type::Tuple(t) if t.elems.is_empty()) {
         return Ok(());
     }
+    if let Some(elems) = parse_sync_tuple_return(ty) {
+        for elem in &elems {
+            if !is_sync_callback_arg_type(elem) {
+                return Err(syn::Error::new_spanned(
+                    elem,
+                    "tuple return elements must be bool, String, integer, or float (used as callback args)",
+                ));
+            }
+        }
+        return Ok(());
+    }
     if is_option_string(ty) {
         return Ok(());
     }
@@ -699,6 +767,7 @@ fn expand_sync_method(
         syn::ReturnType::Type(_, ty) => (**ty).clone(),
     };
     validate_sync_return(&return_ty)?;
+    let tuple_return = parse_sync_tuple_return(&return_ty);
 
     let work_name = &func.sig.ident;
     let handler_name = format_ident!("{}_handler", work_name);
@@ -707,7 +776,13 @@ fn expand_sync_method(
         .iter()
         .filter(|a| a.optional_default.is_none())
         .count();
-    let min_locals = if self_arg != SelfArg::None {
+    let min_locals = if tuple_return.is_some() {
+        if self_arg != SelfArg::None {
+            (required_args + 3) as i32
+        } else {
+            (required_args + 2) as i32
+        }
+    } else if self_arg != SelfArg::None {
         (required_args + 2) as i32
     } else {
         (required_args + 1) as i32
@@ -755,7 +830,30 @@ fn expand_sync_method(
         (quote! {}, quote! {})
     };
 
-    let finish = if is_option_vec_usize(&return_ty) {
+    let finish = if let Some(tuple_elems) = &tuple_return {
+        let tuple_vars: Vec<_> = (0..tuple_elems.len())
+            .map(|i| format_ident!("__tuple_{}", i))
+            .collect();
+        let callback_pushes: Vec<_> = tuple_elems
+            .iter()
+            .zip(&tuple_vars)
+            .map(|(ty, var)| callback_arg_push(ty, var))
+            .collect::<Result<_, _>>()?;
+        quote! {
+            let __callback = crate::some_or_end!(site.capture_callback());
+            let __sync_result = #work_call;
+            #state_epilogue
+            let (#( #tuple_vars, )*) = __sync_result;
+            let mut __callback_args = Vec::new();
+            #( #callback_pushes )*
+            let _ = crate::runner::builtin_async::invoke_script_callback(
+                site.vm(),
+                __callback,
+                &mut __callback_args,
+            );
+            crate::runner::builtin_sync::set_sync_return((), site.vm())
+        }
+    } else if is_option_vec_usize(&return_ty) {
         quote! {
             let __sync_result = #work_call;
             #state_epilogue

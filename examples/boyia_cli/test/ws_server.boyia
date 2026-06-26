@@ -1,32 +1,38 @@
 // WebSocket echo server for manual test with test/ws_client.py
 // Run: cargo run -p boyia_cli -- test/ws_server.boyia
+//
+// Wrap in a class so anonymous callbacks in receive() have mClass (capture this).
 
-var server;
+class WsEchoServer {
+    prop server;
 
-fun runWsServer(host, port) {
-    server = new(WebSocketServer);
+    prop fun run(host, port) {
+        this.server = new(WebSocketServer);
 
-    BY_Log("WebSocketServer: starting on ws://127.0.0.1:8080/");
+        BY_Log("WebSocketServer: starting on ws://127.0.0.1:8080/");
 
-    var started = server.start(host, port);
-    BY_Log("WebSocketServer: start returned");
+        var started = this.server.start(host, port);
+        BY_Log("WebSocketServer: start returned");
 
-    if (!started) {
-        BY_Log("WebSocketServer: failed to bind 127.0.0.1:8080");
-        return;
-    }
-
-    BY_Log("WebSocketServer: listening (Ctrl+C to stop)");
-    BY_Log("Run client: python3 test/ws_client.py");
-
-    while (server.isRunning() == 1) {
-        var msg = server.receive();
-        if (msg == "") {
-            break;
+        if (!started) {
+            BY_Log("WebSocketServer: failed to bind 127.0.0.1:9122");
+            return;
         }
-        BY_Log("received message");
-        server.send("echo: " + msg);
-    }
-}
 
-runWsServer("127.0.0.1", 8080);
+        BY_Log("WebSocketServer: listening (Ctrl+C to stop)");
+        BY_Log("Run client: python3 test/ws_client.py");
+
+        while (this.server.isRunning() == 1) {
+            this.server.receive(fun(clientPort, msg) {
+                if (msg == "") {
+                    return;
+                }
+                BY_Log("received on port " + clientPort + ": " + msg);
+                this.server.send(clientPort, "echo: " + msg);
+            });
+        }
+    }
+};
+
+var app = new(WsEchoServer);
+app.run("127.0.0.1", 9122);

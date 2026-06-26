@@ -19,7 +19,7 @@ except ImportError:
     print("Missing dependency. Install with: pip install websocket-client", file=sys.stderr)
     sys.exit(1)
 
-DEFAULT_URL = "ws://127.0.0.1:8080/"
+DEFAULT_URL = "ws://127.0.0.1:9122/"
 DEFAULT_MESSAGE = "hello from ws_client.py"
 
 

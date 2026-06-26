@@ -5,6 +5,7 @@
 
 use builtin_macro::{boyia_class, boyia_native_object};
 use futures_util::{SinkExt, StreamExt};
+use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -17,9 +18,9 @@ use tokio_tungstenite::tungstenite::Message;
 type ClientTx = tokio_mpsc::UnboundedSender<Message>;
 
 struct ServerRuntime {
-    inbox_tx: Sender<String>,
-    inbox_rx: Mutex<Receiver<String>>,
-    clients: Arc<Mutex<Vec<ClientTx>>>,
+    inbox_tx: Sender<(u16, String)>,
+    inbox_rx: Mutex<Receiver<(u16, String)>>,
+    clients: Arc<Mutex<HashMap<u16, ClientTx>>>,
     shutdown_tx: watch::Sender<()>,
     join: JoinHandle<()>,
 }
@@ -27,7 +28,7 @@ struct ServerRuntime {
 impl ServerRuntime {
     fn start(host: String, port: u16) -> Option<Self> {
         let (inbox_tx, inbox_rx) = mpsc::channel();
-        let clients = Arc::new(Mutex::new(Vec::new()));
+        let clients = Arc::new(Mutex::new(HashMap::new()));
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
 
@@ -86,25 +87,32 @@ impl ServerRuntime {
     fn stop(self) {
         let _ = self.shutdown_tx.send(());
         let _ = self.join.join();
-        // Drop inbox_tx so a blocked receive() returns "" after shutdown.
     }
 
     /// Block until a text frame arrives or the inbox channel is closed (shutdown).
-    fn recv_blocking(&self) -> String {
+    fn recv_blocking(&self) -> (u16, String) {
         match self.inbox_rx.lock().unwrap().recv() {
-            Ok(msg) => msg,
-            Err(_) => String::new(),
+            Ok(pair) => pair,
+            Err(_) => (0, String::new()),
         }
     }
 
-    fn push_text_to_clients(&self, message: String) -> bool {
+    fn push_text_to_client(&self, client_port: u16, message: String) -> bool {
+        let clients = self.clients.lock().unwrap();
+        let Some(tx) = clients.get(&client_port) else {
+            return false;
+        };
+        tx.send(Message::Text(message.into())).is_ok()
+    }
+
+    fn push_text_to_all_clients(&self, message: String) -> bool {
         let msg = Message::Text(message.into());
         let clients = self.clients.lock().unwrap();
         if clients.is_empty() {
             return false;
         }
         let mut any = false;
-        for tx in clients.iter() {
+        for tx in clients.values() {
             if tx.send(msg.clone()).is_ok() {
                 any = true;
             }
@@ -122,14 +130,14 @@ fn normalize_host(host: &str) -> String {
     }
 }
 
-fn enqueue_text(inbox_tx: &Sender<String>, text: String) {
-    let _ = inbox_tx.send(text);
+fn enqueue_text(inbox_tx: &Sender<(u16, String)>, client_port: u16, text: String) {
+    let _ = inbox_tx.send((client_port, text));
 }
 
 async fn run_server(
     listener: TcpListener,
-    inbox_tx: Sender<String>,
-    clients: Arc<Mutex<Vec<ClientTx>>>,
+    inbox_tx: Sender<(u16, String)>,
+    clients: Arc<Mutex<HashMap<u16, ClientTx>>>,
     mut shutdown: watch::Receiver<()>,
 ) {
     loop {
@@ -155,9 +163,11 @@ async fn run_server(
 
 async fn handle_connection(
     stream: TcpStream,
-    inbox_tx: Sender<String>,
-    clients: Arc<Mutex<Vec<ClientTx>>>,
+    inbox_tx: Sender<(u16, String)>,
+    clients: Arc<Mutex<HashMap<u16, ClientTx>>>,
 ) {
+    let client_port = stream.peer_addr().map(|a| a.port()).unwrap_or(0);
+
     let mut ws = match tokio_tungstenite::accept_async(stream).await {
         Ok(ws) => ws,
         Err(err) => {
@@ -167,7 +177,7 @@ async fn handle_connection(
     };
 
     let (client_tx, mut client_rx) = tokio_mpsc::unbounded_channel();
-    clients.lock().unwrap().push(client_tx);
+    clients.lock().unwrap().insert(client_port, client_tx);
 
     loop {
         tokio::select! {
@@ -181,11 +191,11 @@ async fn handle_connection(
                     }
                     Some(Ok(Message::Pong(_))) => {}
                     Some(Ok(Message::Text(text))) => {
-                        enqueue_text(&inbox_tx, text.to_string());
+                        enqueue_text(&inbox_tx, client_port, text.to_string());
                     }
                     Some(Ok(Message::Binary(bytes))) => {
                         if let Ok(text) = String::from_utf8(bytes.to_vec()) {
-                            enqueue_text(&inbox_tx, text);
+                            enqueue_text(&inbox_tx, client_port, text);
                         }
                     }
                     Some(Ok(Message::Close(_))) | Some(Err(_)) => break,
@@ -206,7 +216,7 @@ async fn handle_connection(
     }
 
     let _ = ws.close(None).await;
-    clients.lock().unwrap().retain(|tx| !tx.is_closed());
+    clients.lock().unwrap().remove(&client_port);
 }
 
 #[boyia_native_object]
@@ -284,27 +294,31 @@ impl WebSocketServerBuiltins {
             .unwrap_or(0)
     }
 
-    /// Block until a text WebSocket frame is received; returns "" after [stop] / shutdown.
+    /// Block until a text WebSocket frame is received; returns (client port, message).
+    /// Script must pass a callback as the last argument; tuple fields become callback params.
     #[boyia_sync_builtin(method = "receive")]
-    fn receive(&self) -> String {
+    fn receive(&self) -> (u16, String) {
         let Some(runtime) = self.runtime.as_ref() else {
-            return String::new();
+            return (0, String::new());
         };
         runtime.recv_blocking()
     }
 
-    /// Send a text WebSocket frame to all connected clients.
+    /// Send a text WebSocket frame to the client identified by `client_port`.
     #[boyia_sync_builtin(method = "send")]
-    fn send(&self, message: String) -> bool {
+    fn send(&self, client_port: u64, message: String) -> bool {
         let Some(runtime) = self.runtime.as_ref() else {
             return false;
         };
-        runtime.push_text_to_clients(message)
+        runtime.push_text_to_client(client_port as u16, message)
     }
 
-    /// Alias of `send`: broadcast a text frame to every client.
+    /// Broadcast a text frame to every connected client.
     #[boyia_sync_builtin(method = "broadcast")]
     fn broadcast(&self, message: String) -> bool {
-        self.send(message)
+        let Some(runtime) = self.runtime.as_ref() else {
+            return false;
+        };
+        runtime.push_text_to_all_clients(message)
     }
 }

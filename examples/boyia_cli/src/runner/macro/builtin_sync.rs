@@ -79,6 +79,11 @@ impl<'a> SyncCallSite<'a> {
         }
     }
 
+    /// Callback local for tuple-return sync builtins: `size - 2` (before `this`).
+    pub fn capture_callback(&mut self) -> Option<crate::runner::builtin_async::ScriptCallback> {
+        crate::runner::builtin_async::capture_script_callback(self.vm, self.size - 2)
+    }
+
     fn arg_int(&mut self, index: LInt) -> Option<i64> {
         let val = unsafe { get_local_value(index, self.vm) as *const BoyiaValue };
         if val.is_null() {
@@ -237,6 +242,36 @@ unsafe fn string_to_boyia_value(vm: &mut BoyiaVM, s: &str) -> Option<BoyiaValue>
         return None;
     }
     Some(value)
+}
+
+/// Push an integer callback argument (for tuple-return sync builtins).
+pub fn push_callback_int(value: i64, _vm: &mut BoyiaVM) -> Option<BoyiaValue> {
+    Some(BoyiaValue {
+        mNameKey: 0,
+        mValueType: ValueType::BY_INT,
+        mValue: RealValue {
+            mIntVal: value as LIntPtr,
+        },
+    })
+}
+
+/// Push a bool callback argument.
+pub fn push_callback_bool(value: bool, vm: &mut BoyiaVM) -> Option<BoyiaValue> {
+    push_callback_int(if value { 1 } else { 0 }, vm)
+}
+
+/// Push a float callback argument.
+pub fn push_callback_f64(value: f64, _vm: &mut BoyiaVM) -> Option<BoyiaValue> {
+    Some(BoyiaValue {
+        mNameKey: 0,
+        mValueType: ValueType::BY_REAL,
+        mValue: RealValue { mRealVal: value },
+    })
+}
+
+/// Push a string callback argument.
+pub fn push_callback_string(value: String, vm: &mut BoyiaVM) -> Option<BoyiaValue> {
+    unsafe { string_to_boyia_value(vm, &value) }
 }
 
 #[macro_export]

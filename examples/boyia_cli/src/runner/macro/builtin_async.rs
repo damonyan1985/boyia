@@ -64,7 +64,22 @@ impl AsyncCtx {
 
 /// Opaque script callback token (VM details live inside [CallbackInfo]).
 #[derive(Clone)]
-pub struct ScriptCallback(CallbackInfo);
+pub struct ScriptCallback(pub(crate) CallbackInfo);
+
+/// Capture a script callback from a VM local (last arg before `this` for sync tuple returns).
+pub fn capture_script_callback(vm: &mut BoyiaVM, index: LInt) -> Option<ScriptCallback> {
+    let val = unsafe { get_local_value(index, vm) as *const BoyiaValue };
+    unsafe { make_callback_info(vm, val) }.map(ScriptCallback)
+}
+
+/// Invoke a one-shot script callback with typed arguments, then release captures.
+pub fn invoke_script_callback(
+    vm: &mut BoyiaVM,
+    callback: ScriptCallback,
+    arg_values: &mut [BoyiaValue],
+) -> bool {
+    unsafe { invoke_script_callback_impl(vm, callback.0, arg_values) }
+}
 
 /// Result posted to script callbacks: a Map with `status`, optional `data` / `message`.
 #[derive(Debug)]
@@ -405,6 +420,75 @@ unsafe fn build_async_result_map(vm: &mut BoyiaVM, r: &AsyncBuiltinResult) -> Op
         }
     }
     Some(map_val)
+}
+
+unsafe fn invoke_script_callback_impl(
+    vm: &mut BoyiaVM,
+    callback: CallbackInfo,
+    arg_values: &mut [BoyiaValue],
+) -> bool {
+    let cb_fun = callback.func_ptr as *mut BoyiaFunction;
+    if cb_fun.is_null() {
+        release_script_callback_captures(vm, &callback);
+        return false;
+    }
+
+    let obj_super = if callback.object_global.is_null() {
+        K_BOYIA_NULL
+    } else {
+        (*callback.object_global).value().mValue.mObj.mPtr
+    };
+
+    let callback_value = BoyiaValue {
+        mNameKey: callback.name_key,
+        mValueType: callback.value_type,
+        mValue: RealValue {
+            mObj: BoyiaClass {
+                mPtr: callback.func_ptr,
+                mSuper: obj_super,
+            },
+        },
+    };
+
+    let arity = 1 + arg_values.len();
+    let mut call_args = Vec::with_capacity(arity);
+    call_args.push(callback_value);
+    call_args.extend_from_slice(arg_values);
+
+    if !(*cb_fun).mParams.is_null() {
+        let param_count = (*cb_fun).mParamSize as usize;
+        for (i, slot) in call_args.iter_mut().skip(1).enumerate() {
+            if i < param_count {
+                slot.mNameKey = (*(*cb_fun).mParams.add(i)).mNameKey;
+            }
+        }
+    }
+
+    let mut obj = BoyiaValue {
+        mNameKey: 0,
+        mValueType: ValueType::BY_CLASS,
+        mValue: RealValue {
+            mObj: BoyiaClass {
+                mPtr: obj_super,
+                mSuper: K_BOYIA_NULL,
+            },
+        },
+    };
+
+    native_call_impl(call_args.as_mut_ptr(), arity as LInt, &mut obj, vm);
+    release_script_callback_captures(vm, &callback);
+    true
+}
+
+unsafe fn release_script_callback_captures(vm: &mut BoyiaVM, callback: &CallbackInfo) {
+    if callback.object_global.is_null() {
+        return;
+    }
+    let rt = boyia_vm::get_runtime_from_vm(vm);
+    if rt.is_null() {
+        return;
+    }
+    (*rt).remove_persistent(callback.object_global);
 }
 
 unsafe fn callback_async_result(
