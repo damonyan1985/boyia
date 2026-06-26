@@ -9,7 +9,7 @@ class WsEchoServer {
     prop fun run(host, port) {
         this.server = new(WebSocketServer);
 
-        BY_Log("WebSocketServer: starting on ws://127.0.0.1:8080/");
+        BY_Log("WebSocketServer: starting on ws://127.0.0.1:9122/");
 
         var started = this.server.start(host, port);
         BY_Log("WebSocketServer: start returned");
@@ -22,7 +22,7 @@ class WsEchoServer {
         BY_Log("WebSocketServer: listening (Ctrl+C to stop)");
         BY_Log("Run client: python3 test/ws_client.py");
 
-        while (this.server.isRunning() == 1) {
+        while (this.server.isRunning()) {
             this.server.receive(fun(clientPort, msg) {
                 if (msg == "") {
                     return;

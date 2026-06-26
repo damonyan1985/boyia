@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WebSocket client test for Boyia WebSocketServer (ws://127.0.0.1:8080/).
+"""WebSocket client test for Boyia WebSocketServer (ws://127.0.0.1:9122/).
 
 Usage:
   1. Start server:  cargo run -p boyia_cli -- test/ws_server.boyia

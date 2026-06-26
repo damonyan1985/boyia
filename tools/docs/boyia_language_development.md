@@ -89,6 +89,57 @@ class Service {
 };
 ```
 
+### 3.5 匿名函数（`fun`）
+
+Boyia 使用 `fun(参数) { ... }` 声明匿名函数，常用于 builtin 的 **callback** 最后一个参数，例如：
+
+```boyia
+File.read("path.txt", fun(res) {
+    BY_Log(res.get("data"));
+});
+```
+
+**匿名函数必须在类方法中使用**（类内的 `fun` 或 `prop fun`）。不要在顶层脚本、普通全局 `fun` 里把匿名函数当作 callback 传给 builtin。
+
+原因：创建匿名函数时 VM 需要当前类的上下文（`mClass`）。只有从类实例方法调用时该上下文才会正确设置；写在普通 `fun` 里会导致匿名函数无法绑定对象。
+
+违反此规则时，运行时会报错并停止执行，例如：
+
+```text
+runtime error (line 5): anonymous function (fun) must be used inside a class method; declare it within prop fun or fun of a class
+```
+
+```boyia
+// ❌ 不推荐：顶层 fun 里传 callback
+fun runServer() {
+    server.receive(fun(port, msg) {
+        server.send(port, msg);
+    });
+}
+
+// ✅ 推荐：写在类方法里，通过 this 访问实例
+class WsEchoServer {
+    prop server;
+
+    prop fun run(host, port) {
+        this.server = new(WebSocketServer);
+        this.server.start(host, port);
+        while (this.server.isRunning() == 1) {
+            this.server.receive(fun(port, msg) {
+                this.server.send(port, "echo: " + msg);
+            });
+        }
+    }
+};
+```
+
+适用场景：
+
+- **异步 builtin**（`File.read`、`Https.load` 等）：最后一个参数为 callback。
+- **返回元组的同步 builtin**（如 `WebSocketServer.receive`）：Rust 侧返回 `(port, message)` 等元组，脚本最后一个参数为 callback，元组字段按顺序成为 callback 的参数（见 [6.1](#61-推荐写法boyia_class-宏)）。
+
+类方法内的匿名函数可捕获外层 `this`，在 callback 里访问实例字段与方法。
+
 ## 4. 继承
 
 使用 `extends` 实现继承：
@@ -258,8 +309,9 @@ impl FileBuiltins {
 属性说明：
 
 - `#[boyia_class(name = "ClassName", registrar = builtin_xxx_class)]`：挂在 `impl` 上，生成全局类注册函数。
-- `#[boyia_async_builtin(method = "...")]`：异步方法，最后一个脚本参数为 callback。VM native 符号默认为 `{Rust 方法名}_native`（可用 `native = ...` 覆盖）。
+- `#[boyia_async_builtin(method = "...")]`：异步方法，最后一个脚本参数为 callback。VM native 符号默认为 `{Rust 方法名}_native`（可用 `native = ...` 覆盖）。callback 须写在类方法中（见 [3.5](#35-匿名函数fun)）。
 - `#[boyia_sync_builtin(method = "...")]`：同步方法，直接在 VM 线程执行并写回结果。native 符号规则同上。
+  - 若 Rust 返回**非空元组**（如 `(u16, String)`），脚本侧**最后一个参数必须是 callback**；宏自动捕获 callback 并用元组各字段作为 callback 参数调用，Rust work 函数**不要**声明 callback 参数。匿名 callback 须写在类方法中（见 [3.5 匿名函数](#35-匿名函数fun)）。
 - `#[optional(default = "...")]`：可选参数，**目前仅支持 `String` 类型**（如 Tensor 的 `dtype` 默认 `"float32"`）。省略时由宏注入默认值，且不占用 VM 参数槽位。
 
 约束：
@@ -289,6 +341,7 @@ impl FileBuiltins {
 | `Option<serde_json::Value>` | Boyia 对象（`Json.parse`） |
 | `Option<Vec<usize>>` | Boyia Array（如 `Tensor.shape`） |
 | `Handle`（`type Handle = usize`） | 无符号整数句柄；`0` 表示失败 / 无效 |
+| 非空元组（如 `(u16, String)`） | 脚本侧**不**直接接收返回值；须传 callback，字段依次作为 callback 参数（见 [3.5](#35-匿名函数fun)） |
 
 注册到 CLI：
 
