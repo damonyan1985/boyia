@@ -1,7 +1,7 @@
 // WebSocket echo server for manual test with test/ws_client.py
 // Run: cargo run -p boyia_cli -- test/ws_server.boyia
 //
-// Wrap in a class so anonymous callbacks in receive() have mClass (capture this).
+// Wrap in a class so anonymous callbacks in onReceive() have mClass (capture this).
 
 class WsEchoServer {
     prop server;
@@ -22,15 +22,13 @@ class WsEchoServer {
         BY_Log("WebSocketServer: listening (Ctrl+C to stop)");
         BY_Log("Run client: python3 test/ws_client.py");
 
-        while (this.server.isRunning()) {
-            this.server.receive(fun(clientPort, msg) {
-                if (msg == "") {
-                    return;
-                }
-                BY_Log("received on port " + clientPort + ": " + msg);
-                this.server.send(clientPort, "echo: " + msg);
-            });
-        }
+        this.server.onReceive(fun(clientPort, msg) {
+            if (msg == "") {
+                return;
+            }
+            BY_Log("received on port " + clientPort + ": " + msg);
+            this.server.send(clientPort, "echo: " + msg);
+        });
     }
 };
 

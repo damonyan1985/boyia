@@ -2,7 +2,8 @@
 
 本文以 `examples/boyia_cli/src/builtins/external/config.rs` 中的 **Config** 内置类为例，说明 Rust struct 如何通过 `nativePtr` + `Box<T>` 挂到 Boyia 实例上，以及 `#[boyia_native_object]` / `#[boyia_class(...)]` 的完整使用与宏展开流程。
 
-相关总览见 [Boyia 语言开发文档](./boyia_language_development.md) 第 6 节。
+相关总览见 [Boyia 语言开发文档](./boyia_language_development.md) 第 6 节。  
+若关注 `onReceive` 一类持续回调的宏化实现，参见 [Persistent Callback 宏改造方案](./persistent_callback_macro_design.md)。
 
 > **说明：** 旧版 `#[boyia_fields]`（把字段镜像到 VM `mParams`、每次调用 `load`/`store`）已移除。带 `self` 的 builtin 类统一使用本文描述的 **native object** 方案。
 

@@ -72,6 +72,12 @@ struct AsyncMethodConfig {
 struct SyncMethodConfig {
     native: Option<syn::Ident>,
     method: LitStr,
+    callback_persistent: bool,
+}
+
+#[derive(Default)]
+struct NativeObjectConfig {
+    persistent_callbacks: Vec<LitStr>,
 }
 
 enum BuiltinKind {
@@ -172,6 +178,7 @@ impl Parse for SyncMethodConfig {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let mut native = None;
         let mut method = None;
+        let mut callback_persistent = false;
 
         while !input.is_empty() {
             let key: syn::Ident = input.parse()?;
@@ -179,6 +186,20 @@ impl Parse for SyncMethodConfig {
             match key.to_string().as_str() {
                 "native" => native = Some(input.parse()?),
                 "method" => method = Some(parse_string_lit(input)?),
+                "callback" => {
+                    let mode = parse_string_lit(input)?;
+                    match mode.value().as_str() {
+                        "persistent" => callback_persistent = true,
+                        other => {
+                            return Err(syn::Error::new_spanned(
+                                mode,
+                                format!(
+                                    "unsupported callback mode `{other}`; expected `persistent`"
+                                ),
+                            ));
+                        }
+                    }
+                }
                 "before" => {
                     return Err(syn::Error::new(
                         key.span(),
@@ -194,7 +215,7 @@ impl Parse for SyncMethodConfig {
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
-                        format!("unknown key `{other}`, expected `method` or `native`"),
+                        format!("unknown key `{other}`, expected `method`, `native`, or `callback`"),
                     ));
                 }
             }
@@ -208,7 +229,44 @@ impl Parse for SyncMethodConfig {
             method: method.ok_or_else(|| {
                 syn::Error::new(Span::call_site(), "missing `method = \"...\"` in attribute")
             })?,
+            callback_persistent,
         })
+    }
+}
+
+impl Parse for NativeObjectConfig {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let mut cfg = NativeObjectConfig::default();
+        while !input.is_empty() {
+            let key: syn::Ident = input.parse()?;
+            input.parse::<syn::Token![=]>()?;
+            match key.to_string().as_str() {
+                "persistent_callbacks" => {
+                    let arr: syn::ExprArray = input.parse()?;
+                    let mut names = Vec::new();
+                    for elem in arr.elems {
+                        let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = elem else {
+                            return Err(syn::Error::new_spanned(
+                                elem,
+                                "persistent_callbacks expects string literals",
+                            ));
+                        };
+                        names.push(s);
+                    }
+                    cfg.persistent_callbacks = names;
+                }
+                other => {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        format!("unknown key `{other}` on #[boyia_native_object]"),
+                    ));
+                }
+            }
+            if input.peek(Comma) {
+                input.parse::<Comma>()?;
+            }
+        }
+        Ok(cfg)
     }
 }
 
@@ -236,6 +294,7 @@ struct ArgInfo {
     optional_default: Option<String>,
     /// 1-based script argument index.
     index: usize,
+    consumes_script_arg: bool,
 }
 
 fn pat_ident(pat: &Pat) -> syn::Result<syn::Ident> {
@@ -288,15 +347,27 @@ fn collect_args(func: &ItemFn) -> syn::Result<(SelfArg, Vec<ArgInfo>)> {
         };
         let name = pat_ident(pat)?;
         let optional_default = parse_optional_default(attrs);
+        let consumes_script_arg = !is_async_ctx_type(ty) && !is_script_callback_type(ty);
         args.push(ArgInfo {
             name,
             ty: (**ty).clone(),
             optional_default,
             index,
+            consumes_script_arg,
         });
-        index += 1;
+        if consumes_script_arg {
+            index += 1;
+        }
     }
     Ok((self_arg, args))
+}
+
+fn is_async_ctx_type(ty: &Type) -> bool {
+    type_last_ident(ty).as_deref() == Some("AsyncCtx")
+}
+
+fn is_script_callback_type(ty: &Type) -> bool {
+    type_last_ident(ty).as_deref() == Some("ScriptCallback")
 }
 
 fn type_last_ident(ty: &Type) -> Option<String> {
@@ -305,6 +376,21 @@ fn type_last_ident(ty: &Type) -> Option<String> {
         Type::Tuple(t) if t.elems.is_empty() => Some("()".into()),
         _ => None,
     }
+}
+
+fn method_suffix_ident(method: &str) -> syn::Ident {
+    let mut out = String::new();
+    for ch in method.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() || out.as_bytes()[0].is_ascii_digit() {
+        out.insert(0, '_');
+    }
+    format_ident!("{}", out)
 }
 
 fn is_option_string(ty: &Type) -> bool {
@@ -534,6 +620,19 @@ fn async_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> 
 fn sync_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> {
     let name = &arg.name;
     let index = arg.index as i32;
+
+    if is_async_ctx_type(&arg.ty) {
+        return Ok(quote! {
+            let #name = crate::some_or_end!(crate::runner::builtin_async::async_ctx_from_vm(site.vm()));
+        });
+    }
+
+    if is_script_callback_type(&arg.ty) {
+        return Err(syn::Error::new_spanned(
+            &arg.ty,
+            "ScriptCallback must be captured via `callback = \"persistent\"` and be the last parameter",
+        ));
+    }
 
     if arg.optional_default.is_some() {
         let default = arg.optional_default.as_ref().unwrap();
@@ -768,15 +867,31 @@ fn expand_sync_method(
     };
     validate_sync_return(&return_ty)?;
     let tuple_return = parse_sync_tuple_return(&return_ty);
+    if config.callback_persistent {
+        if self_arg == SelfArg::None {
+            return Err(syn::Error::new_spanned(
+                func,
+                "`callback = \"persistent\"` requires a method with `self` to persist callback state",
+            ));
+        }
+        if tuple_return.is_none() {
+            return Err(syn::Error::new_spanned(
+                &func.sig.output,
+                "`callback = \"persistent\"` requires a non-empty tuple return to describe callback argument schema",
+            ));
+        }
+    }
+    let normal_args = args.as_slice();
 
     let work_name = &func.sig.ident;
     let handler_name = format_ident!("{}_handler", work_name);
     let native_name = resolve_native_name(work_name, config.native.as_ref());
-    let required_args = args
+    let required_args = normal_args
         .iter()
-        .filter(|a| a.optional_default.is_none())
+        .filter(|a| a.consumes_script_arg && a.optional_default.is_none())
         .count();
-    let min_locals = if tuple_return.is_some() {
+    let has_callback_slot = tuple_return.is_some() || config.callback_persistent;
+    let min_locals = if has_callback_slot {
         if self_arg != SelfArg::None {
             (required_args + 3) as i32
         } else {
@@ -787,21 +902,28 @@ fn expand_sync_method(
     } else {
         (required_args + 1) as i32
     };
-    let arg_names: Vec<_> = args.iter().map(|a| &a.name).collect();
-    let arg_extractions: Vec<_> = args.iter().map(sync_arg_extraction).collect::<Result<_, _>>()?;
+    let arg_names: Vec<_> = normal_args.iter().map(|a| &a.name).collect();
+    let arg_extractions: Vec<_> = normal_args
+        .iter()
+        .map(sync_arg_extraction)
+        .collect::<Result<_, _>>()?;
+    let call_arg_names: Vec<proc_macro2::TokenStream> = arg_names
+        .iter()
+        .map(|name| quote! { #name })
+        .collect();
 
     let work_call = if self_arg != SelfArg::None {
         match self_arg {
             SelfArg::Ref | SelfArg::Mut => {
-                quote! { #struct_ty::#work_name(state, #( #arg_names, )*) }
+                quote! { #struct_ty::#work_name(state, #( #call_arg_names, )*) }
             }
             SelfArg::None => unreachable!(),
         }
     } else {
         match self_arg {
-            SelfArg::None => quote! { #struct_ty::#work_name( #( #arg_names, )* ) },
-            SelfArg::Ref => quote! { #struct_ty::#work_name(&state, #( #arg_names, )*) },
-            SelfArg::Mut => quote! { #struct_ty::#work_name(&mut state, #( #arg_names, )*) },
+            SelfArg::None => quote! { #struct_ty::#work_name( #( #call_arg_names, )* ) },
+            SelfArg::Ref => quote! { #struct_ty::#work_name(&state, #( #call_arg_names, )*) },
+            SelfArg::Mut => quote! { #struct_ty::#work_name(&mut state, #( #call_arg_names, )*) },
         }
     };
 
@@ -830,7 +952,26 @@ fn expand_sync_method(
         (quote! {}, quote! {})
     };
 
-    let finish = if let Some(tuple_elems) = &tuple_return {
+    let persistent_bind = if config.callback_persistent {
+        let method_suffix = method_suffix_ident(&config.method.value());
+        let bind_fn = format_ident!("__boyia_bind_{}", method_suffix);
+        quote! {
+            let __persistent_cb = crate::some_or_end!(site.capture_callback());
+            let __persistent_ctx = crate::some_or_end!(crate::runner::builtin_async::async_ctx_from_vm(site.vm()));
+            state.#bind_fn(__persistent_ctx, __persistent_cb);
+        }
+    } else {
+        quote! {}
+    };
+
+    let finish = if config.callback_persistent {
+        quote! {
+            let __sync_result = #work_call;
+            #state_epilogue
+            let _ = __sync_result;
+            crate::runner::builtin_sync::set_sync_return((), site.vm())
+        }
+    } else if let Some(tuple_elems) = &tuple_return {
         let tuple_vars: Vec<_> = (0..tuple_elems.len())
             .map(|i| format_ident!("__tuple_{}", i))
             .collect();
@@ -882,6 +1023,7 @@ fn expand_sync_method(
     Ok(quote! {
         fn #handler_name(site: &mut crate::runner::builtin_sync::SyncCallSite<'_>) -> boyia_vm::OpHandleResult {
             #state_prelude
+            #persistent_bind
             #( #arg_extractions )*
             #finish
         }
@@ -1146,7 +1288,10 @@ fn field_default_init(field: &Field) -> syn::Result<proc_macro2::TokenStream> {
     Ok(quote! { #name: #init, })
 }
 
-fn expand_boyia_native_object(item: &ItemStruct) -> syn::Result<proc_macro2::TokenStream> {
+fn expand_boyia_native_object(
+    item: &ItemStruct,
+    config: &NativeObjectConfig,
+) -> syn::Result<proc_macro2::TokenStream> {
     let struct_name = &item.ident;
     let generics = &item.generics;
 
@@ -1184,11 +1329,110 @@ fn expand_boyia_native_object(item: &ItemStruct) -> syn::Result<proc_macro2::Tok
     };
     if let Fields::Named(ref mut named) = struct_item.fields {
         named.named.insert(0, hdr_field);
+        for cb in &config.persistent_callbacks {
+            let suffix = method_suffix_ident(&cb.value());
+            let ctx_ident = format_ident!("__boyia_ctx_{}", suffix);
+            let cb_ident = format_ident!("__boyia_cb_{}", suffix);
+            let ctx_field: Field = syn::parse_quote! {
+                #[allow(dead_code)]
+                #ctx_ident: Option<crate::runner::builtin_async::AsyncCtx>
+            };
+            let cb_field: Field = syn::parse_quote! {
+                #[allow(dead_code)]
+                #cb_ident: Option<crate::runner::builtin_async::ScriptCallback>
+            };
+            named.named.push(ctx_field);
+            named.named.push(cb_field);
+        }
     }
 
     let mut default_fields = Vec::new();
     for field in fields {
         default_fields.push(field_default_init(field)?);
+    }
+    for cb in &config.persistent_callbacks {
+        let suffix = method_suffix_ident(&cb.value());
+        let ctx_field = format_ident!("__boyia_ctx_{}", suffix);
+        let cb_field = format_ident!("__boyia_cb_{}", suffix);
+        default_fields.push(quote! { #ctx_field: None, });
+        default_fields.push(quote! { #cb_field: None, });
+    }
+
+    let mut persistent_helpers = Vec::new();
+    for cb in &config.persistent_callbacks {
+        let suffix = method_suffix_ident(&cb.value());
+        let bind_fn = format_ident!("__boyia_bind_{}", suffix);
+        let release_fn = format_ident!("__boyia_release_{}", suffix);
+        let callback_fn = format_ident!("__boyia_callback_{}", suffix);
+        let emit_fn = format_ident!("__boyia_emit_{}", suffix);
+        let ctx_field = format_ident!("__boyia_ctx_{}", suffix);
+        let cb_field = format_ident!("__boyia_cb_{}", suffix);
+        persistent_helpers.push(quote! {
+            fn #bind_fn(
+                &mut self,
+                ctx: crate::runner::builtin_async::AsyncCtx,
+                callback: crate::runner::builtin_async::ScriptCallback,
+            ) {
+                self.#release_fn();
+                self.#ctx_field = Some(ctx);
+                self.#cb_field = Some(callback);
+            }
+
+            fn #release_fn(&mut self) {
+                let Some(callback) = self.#cb_field.take() else {
+                    return;
+                };
+                let Some(ctx) = self.#ctx_field.as_ref().cloned() else {
+                    return;
+                };
+                let _ = ctx.post_runtime_task(move |runtime| {
+                    let vm_ptr = runtime.vm();
+                    if vm_ptr.is_null() {
+                        return;
+                    }
+                    let Some(vm) = (unsafe { boyia_vm::vm_from_void(vm_ptr) }) else {
+                        return;
+                    };
+                    crate::runner::builtin_async::release_script_callback(vm, callback);
+                });
+            }
+
+            fn #callback_fn(
+                &self,
+            ) -> Option<(
+                crate::runner::builtin_async::AsyncCtx,
+                crate::runner::builtin_async::ScriptCallback,
+            )> {
+                Some((self.#ctx_field.as_ref()?.clone(), self.#cb_field.as_ref()?.clone()))
+            }
+
+            fn #emit_fn<F>(
+                ctx: crate::runner::builtin_async::AsyncCtx,
+                callback: crate::runner::builtin_async::ScriptCallback,
+                build_args: F,
+            ) -> bool
+            where
+                F: FnOnce(&mut boyia_vm::BoyiaVM) -> Option<Vec<boyia_vm::BoyiaValue>> + Send + 'static,
+            {
+                ctx.post_runtime_task(move |runtime| {
+                    let vm_ptr = runtime.vm();
+                    if vm_ptr.is_null() {
+                        return;
+                    }
+                    let Some(vm) = (unsafe { boyia_vm::vm_from_void(vm_ptr) }) else {
+                        return;
+                    };
+                    let Some(mut args) = build_args(vm) else {
+                        return;
+                    };
+                    let _ = crate::runner::builtin_async::invoke_script_callback_persistent(
+                        vm,
+                        callback,
+                        &mut args,
+                    );
+                })
+            }
+        });
     }
 
     Ok(quote! {
@@ -1198,6 +1442,7 @@ fn expand_boyia_native_object(item: &ItemStruct) -> syn::Result<proc_macro2::Tok
             fn boyia_new_header() -> boyia_gc::NativePropHeader {
                 boyia_gc::NativePropHeader::new(&<Self as boyia_gc::NativePropTrait>::VTABLE)
             }
+            #( #persistent_helpers )*
         }
 
         impl boyia_gc::NativePropTrait for #struct_name #generics {
@@ -1238,10 +1483,11 @@ fn expand_boyia_native_object(item: &ItemStruct) -> syn::Result<proc_macro2::Tok
 /// }
 /// ```
 #[proc_macro_attribute]
-pub fn boyia_native_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn boyia_native_object(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let config = parse_macro_input!(attr as NativeObjectConfig);
     let item = parse_macro_input!(item as ItemStruct);
 
-    match expand_boyia_native_object(&item) {
+    match expand_boyia_native_object(&item, &config) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }

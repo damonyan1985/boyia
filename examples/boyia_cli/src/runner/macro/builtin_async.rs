@@ -60,6 +60,15 @@ impl AsyncCtx {
             })
             .is_ok()
     }
+
+    pub fn post_runtime_task<F>(&self, task: F) -> bool
+    where
+        F: FnOnce(&mut BoyiaRuntime) + Send + 'static,
+    {
+        self.runtime_handle
+            .post_task(move |runtime| task(runtime.as_mut()))
+            .is_ok()
+    }
 }
 
 /// Opaque script callback token (VM details live inside [CallbackInfo]).
@@ -78,7 +87,21 @@ pub fn invoke_script_callback(
     callback: ScriptCallback,
     arg_values: &mut [BoyiaValue],
 ) -> bool {
-    unsafe { invoke_script_callback_impl(vm, callback.0, arg_values) }
+    unsafe { invoke_script_callback_impl(vm, callback.0, arg_values, true) }
+}
+
+/// Invoke a persistent script callback without releasing captures.
+pub fn invoke_script_callback_persistent(
+    vm: &mut BoyiaVM,
+    callback: ScriptCallback,
+    arg_values: &mut [BoyiaValue],
+) -> bool {
+    unsafe { invoke_script_callback_impl(vm, callback.0, arg_values, false) }
+}
+
+/// Explicitly release a script callback captured object.
+pub fn release_script_callback(vm: &mut BoyiaVM, callback: ScriptCallback) {
+    unsafe { release_script_callback_captures(vm, &callback.0) }
 }
 
 /// Result posted to script callbacks: a Map with `status`, optional `data` / `message`.
@@ -164,7 +187,7 @@ impl<'a> CallSite<'a> {
     }
 }
 
-fn async_ctx_from_vm(vm: &mut BoyiaVM) -> Option<AsyncCtx> {
+pub fn async_ctx_from_vm(vm: &mut BoyiaVM) -> Option<AsyncCtx> {
     unsafe {
         boyia_runtime_from_vm(vm)?
             .embedder::<CliEmbedder>()
@@ -426,6 +449,7 @@ unsafe fn invoke_script_callback_impl(
     vm: &mut BoyiaVM,
     callback: CallbackInfo,
     arg_values: &mut [BoyiaValue],
+    release_after_call: bool,
 ) -> bool {
     let cb_fun = callback.func_ptr as *mut BoyiaFunction;
     if cb_fun.is_null() {
@@ -476,7 +500,9 @@ unsafe fn invoke_script_callback_impl(
     };
 
     native_call_impl(call_args.as_mut_ptr(), arity as LInt, &mut obj, vm);
-    release_script_callback_captures(vm, &callback);
+    if release_after_call {
+        release_script_callback_captures(vm, &callback);
+    }
     true
 }
 

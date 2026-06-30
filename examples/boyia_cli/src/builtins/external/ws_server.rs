@@ -17,10 +17,17 @@ use tokio_tungstenite::tungstenite::Message;
 
 type ClientTx = tokio_mpsc::UnboundedSender<Message>;
 
+#[derive(Clone)]
+struct OnReceiveListener {
+    ctx: crate::runner::builtin_async::AsyncCtx,
+    callback: crate::runner::builtin_async::ScriptCallback,
+}
+
 struct ServerRuntime {
     inbox_tx: Sender<(u16, String)>,
-    inbox_rx: Mutex<Receiver<(u16, String)>>,
+    inbox_rx: Arc<Mutex<Receiver<(u16, String)>>>,
     clients: Arc<Mutex<HashMap<u16, ClientTx>>>,
+    on_receive_listener: Arc<Mutex<Option<OnReceiveListener>>>,
     shutdown_tx: watch::Sender<()>,
     join: JoinHandle<()>,
 }
@@ -28,12 +35,15 @@ struct ServerRuntime {
 impl ServerRuntime {
     fn start(host: String, port: u16) -> Option<Self> {
         let (inbox_tx, inbox_rx) = mpsc::channel();
+        let inbox_rx = Arc::new(Mutex::new(inbox_rx));
         let clients = Arc::new(Mutex::new(HashMap::new()));
+        let on_receive_listener = Arc::new(Mutex::new(None));
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
 
         let inbox_bg = inbox_tx.clone();
         let clients_bg = Arc::clone(&clients);
+        let on_receive_listener_bg = Arc::clone(&on_receive_listener);
         let bind_addr = format!("{host}:{port}");
         let join = std::thread::Builder::new()
             .name(format!("boyia-ws-{port}"))
@@ -60,7 +70,7 @@ impl ServerRuntime {
                         }
                     };
                     let _ = ready_tx.send(true);
-                    run_server(listener, inbox_bg, clients_bg, shutdown_rx).await;
+                    run_server(listener, inbox_bg, clients_bg, on_receive_listener_bg, shutdown_rx).await;
                 });
             })
             .ok()?;
@@ -77,8 +87,9 @@ impl ServerRuntime {
 
         Some(Self {
             inbox_tx,
-            inbox_rx: Mutex::new(inbox_rx),
+            inbox_rx,
             clients,
+            on_receive_listener,
             shutdown_tx,
             join,
         })
@@ -95,6 +106,10 @@ impl ServerRuntime {
             Ok(pair) => pair,
             Err(_) => (0, String::new()),
         }
+    }
+
+    fn set_on_receive_listener(&self, listener: Option<OnReceiveListener>) {
+        *self.on_receive_listener.lock().unwrap() = listener;
     }
 
     fn push_text_to_client(&self, client_port: u16, message: String) -> bool {
@@ -138,6 +153,7 @@ async fn run_server(
     listener: TcpListener,
     inbox_tx: Sender<(u16, String)>,
     clients: Arc<Mutex<HashMap<u16, ClientTx>>>,
+    on_receive_listener: Arc<Mutex<Option<OnReceiveListener>>>,
     mut shutdown: watch::Receiver<()>,
 ) {
     loop {
@@ -152,7 +168,8 @@ async fn run_server(
                     Ok((stream, _)) => {
                         let inbox_tx = inbox_tx.clone();
                         let clients = Arc::clone(&clients);
-                        tokio::spawn(handle_connection(stream, inbox_tx, clients));
+                        let on_receive_listener = Arc::clone(&on_receive_listener);
+                        tokio::spawn(handle_connection(stream, inbox_tx, clients, on_receive_listener));
                     }
                     Err(err) => eprintln!("WebSocketServer: accept error: {err}"),
                 }
@@ -165,6 +182,7 @@ async fn handle_connection(
     stream: TcpStream,
     inbox_tx: Sender<(u16, String)>,
     clients: Arc<Mutex<HashMap<u16, ClientTx>>>,
+    on_receive_listener: Arc<Mutex<Option<OnReceiveListener>>>,
 ) {
     let client_port = stream.peer_addr().map(|a| a.port()).unwrap_or(0);
 
@@ -191,11 +209,36 @@ async fn handle_connection(
                     }
                     Some(Ok(Message::Pong(_))) => {}
                     Some(Ok(Message::Text(text))) => {
-                        enqueue_text(&inbox_tx, client_port, text.to_string());
+                        let text = text.to_string();
+                        enqueue_text(&inbox_tx, client_port, text.clone());
+                        let listener = on_receive_listener.lock().unwrap().clone();
+                        if let Some(listener) = listener {
+                            let _ = WebSocketServerBuiltins::__boyia_emit_onReceive(
+                                listener.ctx,
+                                listener.callback,
+                                move |vm| {
+                                    let port_arg = crate::runner::builtin_sync::push_callback_int(client_port as i64, vm)?;
+                                    let msg_arg = crate::runner::builtin_sync::push_callback_string(text, vm)?;
+                                    Some(vec![port_arg, msg_arg])
+                                },
+                            );
+                        }
                     }
                     Some(Ok(Message::Binary(bytes))) => {
                         if let Ok(text) = String::from_utf8(bytes.to_vec()) {
-                            enqueue_text(&inbox_tx, client_port, text);
+                            enqueue_text(&inbox_tx, client_port, text.clone());
+                            let listener = on_receive_listener.lock().unwrap().clone();
+                            if let Some(listener) = listener {
+                                let _ = WebSocketServerBuiltins::__boyia_emit_onReceive(
+                                    listener.ctx,
+                                    listener.callback,
+                                    move |vm| {
+                                        let port_arg = crate::runner::builtin_sync::push_callback_int(client_port as i64, vm)?;
+                                        let msg_arg = crate::runner::builtin_sync::push_callback_string(text, vm)?;
+                                        Some(vec![port_arg, msg_arg])
+                                    },
+                                );
+                            }
                         }
                     }
                     Some(Ok(Message::Close(_))) | Some(Err(_)) => break,
@@ -219,7 +262,7 @@ async fn handle_connection(
     clients.lock().unwrap().remove(&client_port);
 }
 
-#[boyia_native_object]
+#[boyia_native_object(persistent_callbacks = ["onReceive"])]
 pub struct WebSocketServerBuiltins {
     #[boyia_field_default = "0.0.0.0"]
     host: String,
@@ -233,12 +276,18 @@ pub struct WebSocketServerBuiltins {
 
 impl Drop for WebSocketServerBuiltins {
     fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.as_ref() {
+            runtime.set_on_receive_listener(None);
+        }
+        self.__boyia_release_onReceive();
         if let Some(runtime) = self.runtime.take() {
             runtime.stop();
         }
         self.running = false;
     }
 }
+
+impl WebSocketServerBuiltins {}
 
 #[boyia_class(name = "WebSocketServer", registrar = builtin_websocket_server_class)]
 impl WebSocketServerBuiltins {
@@ -264,6 +313,10 @@ impl WebSocketServerBuiltins {
 
     #[boyia_sync_builtin(method = "stop")]
     fn stop(&mut self) -> bool {
+        if let Some(runtime) = self.runtime.as_ref() {
+            runtime.set_on_receive_listener(None);
+        }
+        self.__boyia_release_onReceive();
         if let Some(runtime) = self.runtime.take() {
             runtime.stop();
         }
@@ -302,6 +355,28 @@ impl WebSocketServerBuiltins {
             return (0, String::new());
         };
         runtime.recv_blocking()
+    }
+
+    /// Register a persistent callback fired for each received message; non-blocking.
+    #[boyia_sync_builtin(method = "onReceive", callback = "persistent")]
+    fn on_receive(&mut self) -> (u16, String) {
+        let Some(runtime) = self.runtime.as_ref() else {
+            return (0, String::new());
+        };
+        let Some((ctx, callback)) = self.__boyia_callback_onReceive() else {
+            return (0, String::new());
+        };
+        runtime.set_on_receive_listener(Some(OnReceiveListener { ctx, callback }));
+        (0, String::new())
+    }
+
+    #[boyia_sync_builtin(method = "offReceive")]
+    fn off_receive(&mut self) -> bool {
+        if let Some(runtime) = self.runtime.as_ref() {
+            runtime.set_on_receive_listener(None);
+        }
+        self.__boyia_release_onReceive();
+        true
     }
 
     /// Send a text WebSocket frame to the client identified by `client_port`.
