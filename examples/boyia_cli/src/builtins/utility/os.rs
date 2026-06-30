@@ -4,6 +4,7 @@
 
 use builtin_macro::boyia_class;
 use std::env;
+use std::time::Duration;
 
 struct OsBuiltins;
 
@@ -40,5 +41,12 @@ impl OsBuiltins {
         std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1)
+    }
+
+    /// Sleep current thread for `ms` milliseconds.
+    #[boyia_sync_builtin(method = "sleep")]
+    fn os_sleep(ms: u64) -> bool {
+        std::thread::sleep(Duration::from_millis(ms));
+        true
     }
 }

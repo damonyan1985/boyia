@@ -192,7 +192,7 @@ boyia/
 - **CLI 内置类**：在 `examples/boyia_cli/src/builtins/` 用 `#[boyia_class]`、`#[boyia_async_builtin]`、`#[boyia_sync_builtin]` 声明；带实例状态时在 struct 上加 `#[boyia_native_object]`（无需 `#[boyia_class(..., native)]`），并加入 `builtins/mod.rs` 的 `DEFAULT_BUILTINS`。
 - **通用 native 函数**：参考 `crates/boyia_lib`，在 `init_native_function` 中注册；有返回值时需 `set_native_result` / `set_int_result` 写入 `reg0`。
 - **编译期函数**：`CompileFunction` + `CompileArg` 返回值，在 `init_compile_function` 注册；可用于常量折叠或编译期副作用（如字面量 `require`）。见开发文档 §7.2。
-- **JSON 转换辅助**：`examples/boyia_cli/src/runner/macro/builtin_json.rs`。
+- **JSON 转换辅助**：`examples/boyia_cli/src/runner/builtin/builtin_json.rs`。
 
 详细步骤、宏约束与异步返回约定见开发文档。
 

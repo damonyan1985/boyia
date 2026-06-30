@@ -19,7 +19,7 @@ type ClientTx = tokio_mpsc::UnboundedSender<Message>;
 
 #[derive(Clone)]
 struct OnReceiveListener {
-    ctx: crate::runner::builtin_async::AsyncCtx,
+    ctx: crate::runner::builtin_ctx::BuiltinCtx,
     callback: crate::runner::builtin_async::ScriptCallback,
 }
 

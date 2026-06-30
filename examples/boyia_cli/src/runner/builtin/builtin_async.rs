@@ -1,9 +1,10 @@
 //! Async builtin infrastructure: VM `unsafe` is confined here.
-//! Business modules (`file` / `https` / `zip`) use [CallSite], [AsyncCtx], [ScriptCallback] only.
+//! Business modules (`file` / `https` / `zip`) use [CallSite], [BuiltinCtx], [ScriptCallback] only.
 
 use boyia_builtins::gen_builtin_class_function;
 use crate::runner::builtin_json::json_to_boyia_value;
-use boyia_runtime::{boyia_runtime_from_vm, BoyiaRuntime};
+use crate::runner::builtin_ctx::{builtin_ctx_from_vm, BuiltinCtx};
+use boyia_runtime::BoyiaRuntime;
 use boyia_vm::{
     copy_object, create_global_class, create_native_string, create_string_object, gen_identifier_from_str,
     get_function_count, get_local_size, get_local_value, native_call_impl, set_int_result, value_copy,
@@ -11,32 +12,9 @@ use boyia_vm::{
     BoyiaValue, BuiltinId, Global, K_BOYIA_NULL, NativePtr, OpHandleResult, RealValue, Runtime, ValueType,
     LInt, LInt8, LIntPtr, LUintPtr, BoyiaVM,
 };
-use crate::runner::run_loop::RunLoopHandle;
-use crate::runner::thread_pool::ThreadPool;
 use std::str;
-use std::sync::Weak;
 
-/// Stored on [BoyiaRuntime] via embedder during CLI init.
-#[derive(Clone)]
-pub struct CliEmbedder {
-    pub async_ctx: AsyncCtx,
-}
-
-/// Safe handle for scheduling thread-pool work and posting callbacks to the Boyia task thread.
-#[derive(Clone)]
-pub struct AsyncCtx {
-    runtime_handle: RunLoopHandle<Box<BoyiaRuntime>>,
-    thread_pool: Weak<ThreadPool>,
-}
-
-impl AsyncCtx {
-    pub fn new(runtime_handle: RunLoopHandle<Box<BoyiaRuntime>>, thread_pool: Weak<ThreadPool>) -> Self {
-        Self {
-            runtime_handle,
-            thread_pool,
-        }
-    }
-
+impl BuiltinCtx {
     pub fn spawn<W, H>(&self, work: W, callback: ScriptCallback, before_callback: H) -> bool
     where
         W: FnOnce() -> AsyncBuiltinResult + Send + 'static,
@@ -58,15 +36,6 @@ impl AsyncCtx {
                     runtime.consume_micro_task();
                 });
             })
-            .is_ok()
-    }
-
-    pub fn post_runtime_task<F>(&self, task: F) -> bool
-    where
-        F: FnOnce(&mut BoyiaRuntime) + Send + 'static,
-    {
-        self.runtime_handle
-            .post_task(move |runtime| task(runtime.as_mut()))
             .is_ok()
     }
 }
@@ -128,7 +97,7 @@ impl AsyncBuiltinResult {
 pub struct CallSite<'a> {
     vm: &'a mut BoyiaVM,
     size: LInt,
-    ctx: AsyncCtx,
+    ctx: BuiltinCtx,
 }
 
 impl<'a> CallSite<'a> {
@@ -137,11 +106,11 @@ impl<'a> CallSite<'a> {
         if size < min_locals {
             return None;
         }
-        let ctx = async_ctx_from_vm(vm)?;
+        let ctx = builtin_ctx_from_vm(vm)?;
         Some(Self { vm, size, ctx })
     }
 
-    pub fn ctx(&self) -> &AsyncCtx {
+    pub fn ctx(&self) -> &BuiltinCtx {
         &self.ctx
     }
 
@@ -184,14 +153,6 @@ impl<'a> CallSite<'a> {
             set_int_result(if scheduled { 1 } else { 0 }, self.vm);
         }
         OpHandleResult::kOpResultSuccess
-    }
-}
-
-pub fn async_ctx_from_vm(vm: &mut BoyiaVM) -> Option<AsyncCtx> {
-    unsafe {
-        boyia_runtime_from_vm(vm)?
-            .embedder::<CliEmbedder>()
-            .map(|e| e.async_ctx.clone())
     }
 }
 

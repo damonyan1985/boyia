@@ -7,7 +7,7 @@ description = "CLI: run Boyia script with BoyiaRuntime (compile, run, BY_Log)"
 [lib]
 name = "builtin_macro"
 proc-macro = true
-path = "src/runner/macro/builtin_macro.rs"
+path = "src/runner/builtin/builtin_macro.rs"
 
 [[bin]]
 name = "boyia_cli"

@@ -247,9 +247,9 @@ CLI 侧目录与入口：
 | `builtins/ai/tensor.rs` | `Tensor` 工厂与句柄管理 |
 | `builtins/mod.rs` | `DEFAULT_BUILTINS` 注册表 |
 | `runner/async.rs`、`runner/sync.rs` | 异步 / 同步 native 基础设施 |
-| `runner/macro/builtin_macro.rs` | 过程宏 `#[boyia_class]` 等（`boyia_cli` 的 `[lib]` proc-macro） |
-| `runner/macro/builtin_json.rs` | Boyia 值 ↔ `serde_json::Value` |
-| `runner/macro/builtin_vec.rs` | Boyia Array ↔ `Vec<usize>` / 嵌套 `NestedVec` |
+| `runner/builtin/builtin_macro.rs` | 过程宏 `#[boyia_class]` 等（`boyia_cli` 的 `[lib]` proc-macro） |
+| `runner/builtin/builtin_json.rs` | Boyia 值 ↔ `serde_json::Value` |
+| `runner/builtin/builtin_vec.rs` | Boyia Array ↔ `Vec<usize>` / 嵌套 `NestedVec` |
 
 > **说明**：`Json` 已从 `boyia_builtins` 迁出，同步与异步 JSON 能力统一由 CLI 的 `Json` 类提供；仅使用 `boyia_runtime` 而不注册 CLI builtins 时，不会有 `Json` / `Tensor` 等 CLI 类。
 
@@ -431,7 +431,7 @@ class Demo {
 | 文件 | 职责 |
 |------|------|
 | `builtins/utility/json.rs` | `#[boyia_class]` 定义：`parse`、`toString`、`asyncParse`、`asyncToString` |
-| `runner/macro/builtin_json.rs` | Boyia 值 ↔ `serde_json::Value` 转换，供宏与 `AsyncBuiltinResult::OkJson` 使用 |
+| `runner/builtin/builtin_json.rs` | Boyia 值 ↔ `serde_json::Value` 转换，供宏与 `AsyncBuiltinResult::OkJson` 使用 |
 
 脚本 API：
 

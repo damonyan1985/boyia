@@ -429,7 +429,7 @@ fn get_timeout_handler(site: &mut SyncCallSite<'_>) -> OpHandleResult {
 |------|------|
 | `examples/boyia_cli/src/builtins/external/config.rs` | Config 源码 |
 | `examples/boyia_cli/src/builtins/mod.rs` | `DEFAULT_BUILTINS` 注册 |
-| `examples/boyia_cli/src/runner/macro/builtin_macro.rs` | `#[boyia_native_object]`、`#[boyia_class]` 过程宏 |
+| `examples/boyia_cli/src/runner/builtin/builtin_macro.rs` | `#[boyia_native_object]`、`#[boyia_class]` 过程宏 |
 | `crates/boyia_gc/src/native_gc.rs` | `nativePtr` 槽、`boyia_ensure_native`、`NativePropTrait` |
 | `examples/boyia_cli/src/runner/sync.rs` | `SyncCallSite`、`this_function()` |
 | `examples/boyia_cli/script/main.boyia` | 脚本调用示例（`testString` 内） |

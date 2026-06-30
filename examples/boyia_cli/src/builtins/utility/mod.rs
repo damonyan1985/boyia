@@ -1,3 +1,4 @@
+pub mod app;
 pub mod file;
 pub mod https;
 pub mod json;

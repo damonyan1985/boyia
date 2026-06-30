@@ -153,7 +153,7 @@ server.onReceive(fun(port, msg) {
 
 下面流程是可以按提交粒度直接执行的最小实现路径。
 
-### A. `runner/macro/builtin_macro.rs`
+### A. `runner/builtin/builtin_macro.rs`
 
 1. 给 `boyia_native_object` 增加可选参数解析：
    - `persistent_callbacks = ["onReceive", "onClose"]`
@@ -170,7 +170,7 @@ server.onReceive(fun(port, msg) {
    - 自动注入 `AsyncCtx`（由 `async_ctx_from_vm` 获取）；
    - 拒绝与 tuple one-shot 回调混用。
 
-### B. `runner/macro/builtin_async.rs`
+### B. `runner/builtin/builtin_async.rs`
 
 保留并复用现有能力：
 

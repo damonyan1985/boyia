@@ -363,7 +363,7 @@ fn collect_args(func: &ItemFn) -> syn::Result<(SelfArg, Vec<ArgInfo>)> {
 }
 
 fn is_async_ctx_type(ty: &Type) -> bool {
-    type_last_ident(ty).as_deref() == Some("AsyncCtx")
+    type_last_ident(ty).as_deref() == Some("BuiltinCtx")
 }
 
 fn is_script_callback_type(ty: &Type) -> bool {
@@ -623,7 +623,7 @@ fn sync_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> {
 
     if is_async_ctx_type(&arg.ty) {
         return Ok(quote! {
-            let #name = crate::some_or_end!(crate::runner::builtin_async::async_ctx_from_vm(site.vm()));
+            let #name = crate::some_or_end!(crate::runner::builtin_ctx::builtin_ctx_from_vm(site.vm()));
         });
     }
 
@@ -831,7 +831,7 @@ fn expand_async_method(
 
     Ok(quote! {
         fn #schedule_name(
-            ctx: &crate::runner::builtin_async::AsyncCtx,
+            ctx: &crate::runner::builtin_ctx::BuiltinCtx,
             #( #arg_names: #arg_types, )*
             callback: crate::runner::builtin_async::ScriptCallback,
         ) -> bool {
@@ -957,7 +957,7 @@ fn expand_sync_method(
         let bind_fn = format_ident!("__boyia_bind_{}", method_suffix);
         quote! {
             let __persistent_cb = crate::some_or_end!(site.capture_callback());
-            let __persistent_ctx = crate::some_or_end!(crate::runner::builtin_async::async_ctx_from_vm(site.vm()));
+            let __persistent_ctx = crate::some_or_end!(crate::runner::builtin_ctx::builtin_ctx_from_vm(site.vm()));
             state.#bind_fn(__persistent_ctx, __persistent_cb);
         }
     } else {
@@ -1335,7 +1335,7 @@ fn expand_boyia_native_object(
             let cb_ident = format_ident!("__boyia_cb_{}", suffix);
             let ctx_field: Field = syn::parse_quote! {
                 #[allow(dead_code)]
-                #ctx_ident: Option<crate::runner::builtin_async::AsyncCtx>
+                #ctx_ident: Option<crate::runner::builtin_ctx::BuiltinCtx>
             };
             let cb_field: Field = syn::parse_quote! {
                 #[allow(dead_code)]
@@ -1370,7 +1370,7 @@ fn expand_boyia_native_object(
         persistent_helpers.push(quote! {
             fn #bind_fn(
                 &mut self,
-                ctx: crate::runner::builtin_async::AsyncCtx,
+                ctx: crate::runner::builtin_ctx::BuiltinCtx,
                 callback: crate::runner::builtin_async::ScriptCallback,
             ) {
                 self.#release_fn();
@@ -1400,14 +1400,14 @@ fn expand_boyia_native_object(
             fn #callback_fn(
                 &self,
             ) -> Option<(
-                crate::runner::builtin_async::AsyncCtx,
+                crate::runner::builtin_ctx::BuiltinCtx,
                 crate::runner::builtin_async::ScriptCallback,
             )> {
                 Some((self.#ctx_field.as_ref()?.clone(), self.#cb_field.as_ref()?.clone()))
             }
 
             fn #emit_fn<F>(
-                ctx: crate::runner::builtin_async::AsyncCtx,
+                ctx: crate::runner::builtin_ctx::BuiltinCtx,
                 callback: crate::runner::builtin_async::ScriptCallback,
                 build_args: F,
             ) -> bool

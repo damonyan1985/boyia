@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use super::builtin_async::{AsyncCtx, CliEmbedder};
+use super::builtin_ctx::{BuiltinCtx, CliEmbedder};
 use super::run_loop::RunLoopError;
 use super::task_thread::TaskThread;
 use super::thread_pool::ThreadPool;
@@ -48,14 +48,14 @@ impl BoyiaRunner {
         };
         let runner_box = Box::new(runner);
 
-        let async_ctx = AsyncCtx::new(
+        let builtin_ctx = BuiltinCtx::new(
             runner_box.boyia_thread.as_ref().unwrap().handle(),
             Arc::downgrade(runner_box.thread_pool.as_ref().unwrap()),
         );
 
         let (init_tx, init_rx) = mpsc::channel();
         let embedder = CliEmbedder {
-            async_ctx: async_ctx.clone(),
+            builtin_ctx: builtin_ctx.clone(),
         };
         let _ = runner_box.boyia_thread.as_ref().unwrap().post_task(move |runtime| {
             let runtime = runtime.as_mut();
@@ -121,22 +121,44 @@ impl BoyiaRunner {
         let _ = done_rx.recv();
         Ok(())
     }
+
+    /// Gracefully stop thread-pool workers and the Boyia task thread.
+    ///
+    /// This method is idempotent-ish: repeated calls may return `RunLoopError::Stopped`
+    /// from already-stopped run loops.
+    pub fn stop(&mut self) -> Result<(), RunLoopError> {
+        let mut stop_err = None;
+
+        if let Some(thread_pool) = self.thread_pool.as_ref() {
+            if let Err(err) = thread_pool.stop() {
+                stop_err = Some(err);
+            }
+        }
+
+        if let Some(boyia_thread) = self.boyia_thread.as_ref() {
+            if let Err(err) = boyia_thread.stop() {
+                if stop_err.is_none() {
+                    stop_err = Some(err);
+                }
+            }
+        }
+
+        self.ready = false;
+        if let Some(err) = stop_err {
+            return Err(err);
+        }
+        Ok(())
+    }
 }
 
 impl Drop for BoyiaRunner {
     fn drop(&mut self) {
-        std::thread::sleep(std::time::Duration::from_secs(20));
-
         if let Some(thread_pool) = self.thread_pool.take() {
-            let _ = thread_pool.stop();
             if let Ok(thread_pool) = Arc::try_unwrap(thread_pool) {
                 let _ = thread_pool.join();
             }
         }
 
-        if let Some(ref boyia_thread) = self.boyia_thread {
-            let _ = boyia_thread.stop();
-        }
         if let Some(boyia_thread) = self.boyia_thread.take() {
             let _ = boyia_thread.join();
         }
