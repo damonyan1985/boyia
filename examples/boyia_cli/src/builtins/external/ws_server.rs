@@ -287,8 +287,6 @@ impl Drop for WebSocketServerBuiltins {
     }
 }
 
-impl WebSocketServerBuiltins {}
-
 #[boyia_class(name = "WebSocketServer", registrar = builtin_websocket_server_class)]
 impl WebSocketServerBuiltins {
     /// Bind `host:port` and accept `ws://host:port/` clients on a background thread.

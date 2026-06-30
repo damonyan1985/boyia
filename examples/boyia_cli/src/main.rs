@@ -6,6 +6,7 @@ mod runner;
 
 use cli::{parse_args, print_usage, resolve_entry_script};
 use runner::BoyiaRunner;
+use std::time::Duration;
 
 fn main() {
     let mut env_args: Vec<String> = std::env::args().skip(1).collect();
@@ -59,4 +60,6 @@ fn main() {
         eprintln!("Error: run failed: {e:?}");
         std::process::exit(1);
     }
+
+    //std::thread::sleep(Duration::from_millis(20000));
 }

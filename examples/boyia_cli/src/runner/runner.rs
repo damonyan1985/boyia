@@ -153,16 +153,15 @@ impl BoyiaRunner {
 
 impl Drop for BoyiaRunner {
     fn drop(&mut self) {
+        if let Some(boyia_thread) = self.boyia_thread.take() {
+            let _ = boyia_thread.join();
+        }
+
         if let Some(thread_pool) = self.thread_pool.take() {
             if let Ok(thread_pool) = Arc::try_unwrap(thread_pool) {
                 let _ = thread_pool.join();
             }
         }
-
-        if let Some(boyia_thread) = self.boyia_thread.take() {
-            let _ = boyia_thread.join();
-        }
-
         println!("BoyiaRunner exit!!!");
     }
 }
