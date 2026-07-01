@@ -3,7 +3,7 @@
 
 use boyia_builtins::gen_builtin_class_function;
 use crate::runner::builtin_json::json_to_boyia_value;
-use crate::runner::builtin_ctx::{builtin_ctx_from_vm, BuiltinCtx};
+use crate::runner::builtin_ctx::BuiltinCtx;
 use boyia_runtime::BoyiaRuntime;
 use boyia_vm::{
     copy_object, create_global_class, create_native_string, create_string_object, gen_identifier_from_str,
@@ -106,7 +106,7 @@ impl<'a> CallSite<'a> {
         if size < min_locals {
             return None;
         }
-        let ctx = builtin_ctx_from_vm(vm)?;
+        let ctx = BuiltinCtx::from_vm(vm)?;
         Some(Self { vm, size, ctx })
     }
 

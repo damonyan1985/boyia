@@ -43,12 +43,12 @@ impl BuiltinCtx {
         }
         self.runtime_handle.stop().is_ok()
     }
-}
-
-pub fn builtin_ctx_from_vm(vm: &mut BoyiaVM) -> Option<BuiltinCtx> {
-    unsafe {
-        boyia_runtime_from_vm(vm)?
-            .embedder::<CliEmbedder>()
-            .map(|e| e.builtin_ctx.clone())
+    
+    pub fn from_vm(vm: &mut BoyiaVM) -> Option<BuiltinCtx> {
+        unsafe {
+            boyia_runtime_from_vm(vm)?
+                .embedder::<CliEmbedder>()
+                .map(|e| e.builtin_ctx.clone())
+        }
     }
 }

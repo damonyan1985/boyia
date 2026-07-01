@@ -623,7 +623,7 @@ fn sync_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> {
 
     if is_async_ctx_type(&arg.ty) {
         return Ok(quote! {
-            let #name = crate::some_or_end!(crate::runner::builtin_ctx::builtin_ctx_from_vm(site.vm()));
+            let #name = crate::some_or_end!(crate::runner::builtin_ctx::BuiltinCtx::from_vm(site.vm()));
         });
     }
 
@@ -957,7 +957,7 @@ fn expand_sync_method(
         let bind_fn = format_ident!("__boyia_bind_{}", method_suffix);
         quote! {
             let __persistent_cb = crate::some_or_end!(site.capture_callback());
-            let __persistent_ctx = crate::some_or_end!(crate::runner::builtin_ctx::builtin_ctx_from_vm(site.vm()));
+            let __persistent_ctx = crate::some_or_end!(crate::runner::builtin_ctx::BuiltinCtx::from_vm(site.vm()));
             state.#bind_fn(__persistent_ctx, __persistent_cb);
         }
     } else {
