@@ -28,6 +28,11 @@ def main() -> int:
     parser.add_argument("--url", default=DEFAULT_URL, help=f"WebSocket URL (default: {DEFAULT_URL})")
     parser.add_argument("--message", "-m", default=DEFAULT_MESSAGE, help="Text frame to send")
     parser.add_argument("--recv-timeout", type=float, default=3.0, help="Seconds to wait for a reply")
+    parser.add_argument(
+        "--close-reason",
+        default="bye from ws_client.py",
+        help="WebSocket close reason sent on disconnect",
+    )
     args = parser.parse_args()
 
     print(f"Connecting to {args.url} ...")
@@ -54,8 +59,13 @@ def main() -> int:
         except WebSocketTimeoutException:
             print(f"(no reply within {args.recv_timeout}s)")
     finally:
-        ws.close()
-        print("Closed.")
+        close_reason = (
+            args.close_reason.encode("utf-8")
+            if isinstance(args.close_reason, str)
+            else args.close_reason
+        )
+        ws.close(status=1000, reason=close_reason)
+        print(f"Closed (reason={args.close_reason!r}).")
 
     return 0
 

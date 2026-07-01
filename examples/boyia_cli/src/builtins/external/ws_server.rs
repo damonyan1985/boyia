@@ -13,6 +13,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc as tokio_mpsc, watch};
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::Message;
 
 type ClientTx = tokio_mpsc::UnboundedSender<Message>;
@@ -23,11 +24,18 @@ struct OnReceiveListener {
     callback: crate::runner::builtin_async::ScriptCallback,
 }
 
+#[derive(Clone)]
+struct OnCloseListener {
+    ctx: crate::runner::builtin_ctx::BuiltinCtx,
+    callback: crate::runner::builtin_async::ScriptCallback,
+}
+
 struct ServerRuntime {
     inbox_tx: Sender<(u16, String)>,
     inbox_rx: Arc<Mutex<Receiver<(u16, String)>>>,
     clients: Arc<Mutex<HashMap<u16, ClientTx>>>,
     on_receive_listener: Arc<Mutex<Option<OnReceiveListener>>>,
+    on_close_listener: Arc<Mutex<Option<OnCloseListener>>>,
     shutdown_tx: watch::Sender<()>,
     join: JoinHandle<()>,
 }
@@ -38,12 +46,14 @@ impl ServerRuntime {
         let inbox_rx = Arc::new(Mutex::new(inbox_rx));
         let clients = Arc::new(Mutex::new(HashMap::new()));
         let on_receive_listener = Arc::new(Mutex::new(None));
+        let on_close_listener = Arc::new(Mutex::new(None));
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
 
         let inbox_bg = inbox_tx.clone();
         let clients_bg = Arc::clone(&clients);
         let on_receive_listener_bg = Arc::clone(&on_receive_listener);
+        let on_close_listener_bg = Arc::clone(&on_close_listener);
         let bind_addr = format!("{host}:{port}");
         let join = std::thread::Builder::new()
             .name(format!("boyia-ws-{port}"))
@@ -70,7 +80,15 @@ impl ServerRuntime {
                         }
                     };
                     let _ = ready_tx.send(true);
-                    run_server(listener, inbox_bg, clients_bg, on_receive_listener_bg, shutdown_rx).await;
+                    run_server(
+                        listener,
+                        inbox_bg,
+                        clients_bg,
+                        on_receive_listener_bg,
+                        on_close_listener_bg,
+                        shutdown_rx,
+                    )
+                    .await;
                 });
             })
             .ok()?;
@@ -90,6 +108,7 @@ impl ServerRuntime {
             inbox_rx,
             clients,
             on_receive_listener,
+            on_close_listener,
             shutdown_tx,
             join,
         })
@@ -110,6 +129,10 @@ impl ServerRuntime {
 
     fn set_on_receive_listener(&self, listener: Option<OnReceiveListener>) {
         *self.on_receive_listener.lock().unwrap() = listener;
+    }
+
+    fn set_on_close_listener(&self, listener: Option<OnCloseListener>) {
+        *self.on_close_listener.lock().unwrap() = listener;
     }
 
     fn push_text_to_client(&self, client_port: u16, message: String) -> bool {
@@ -154,6 +177,7 @@ async fn run_server(
     inbox_tx: Sender<(u16, String)>,
     clients: Arc<Mutex<HashMap<u16, ClientTx>>>,
     on_receive_listener: Arc<Mutex<Option<OnReceiveListener>>>,
+    on_close_listener: Arc<Mutex<Option<OnCloseListener>>>,
     mut shutdown: watch::Receiver<()>,
 ) {
     loop {
@@ -169,7 +193,14 @@ async fn run_server(
                         let inbox_tx = inbox_tx.clone();
                         let clients = Arc::clone(&clients);
                         let on_receive_listener = Arc::clone(&on_receive_listener);
-                        tokio::spawn(handle_connection(stream, inbox_tx, clients, on_receive_listener));
+                        let on_close_listener = Arc::clone(&on_close_listener);
+                        tokio::spawn(handle_connection(
+                            stream,
+                            inbox_tx,
+                            clients,
+                            on_receive_listener,
+                            on_close_listener,
+                        ));
                     }
                     Err(err) => eprintln!("WebSocketServer: accept error: {err}"),
                 }
@@ -178,11 +209,33 @@ async fn run_server(
     }
 }
 
+fn close_info_from_frame(frame: Option<CloseFrame>) -> (u16, String) {
+    match frame {
+        Some(frame) => (u16::from(frame.code), frame.reason.as_str().to_string()),
+        None => (1000, String::new()),
+    }
+}
+
+fn emit_on_close(client_port: u16, close_code: u16, reason: String, listener: OnCloseListener) {
+    let _ = WebSocketServerBuiltins::__boyia_emit_onClose(
+        listener.ctx,
+        listener.callback,
+        move |vm| {
+            let port_arg =
+                crate::runner::builtin_sync::push_callback_int(client_port as i64, vm)?;
+            let code_arg = crate::runner::builtin_sync::push_callback_int(close_code as i64, vm)?;
+            let reason_arg = crate::runner::builtin_sync::push_callback_string(reason, vm)?;
+            Some(vec![port_arg, code_arg, reason_arg])
+        },
+    );
+}
+
 async fn handle_connection(
     stream: TcpStream,
     inbox_tx: Sender<(u16, String)>,
     clients: Arc<Mutex<HashMap<u16, ClientTx>>>,
     on_receive_listener: Arc<Mutex<Option<OnReceiveListener>>>,
+    on_close_listener: Arc<Mutex<Option<OnCloseListener>>>,
 ) {
     let client_port = stream.peer_addr().map(|a| a.port()).unwrap_or(0);
 
@@ -196,6 +249,11 @@ async fn handle_connection(
 
     let (client_tx, mut client_rx) = tokio_mpsc::unbounded_channel();
     clients.lock().unwrap().insert(client_port, client_tx);
+
+    // 1006 = abnormal closure when peer drops without a Close frame.
+    let mut close_code: u16 = 1006;
+    let mut close_reason = String::new();
+    let mut close_handshake_done = false;
 
     loop {
         tokio::select! {
@@ -241,7 +299,14 @@ async fn handle_connection(
                             }
                         }
                     }
-                    Some(Ok(Message::Close(_))) | Some(Err(_)) => break,
+                    Some(Ok(Message::Close(frame))) => {
+                        (close_code, close_reason) = close_info_from_frame(frame.clone());
+                        // Echo peer close frame to complete the handshake.
+                        let _ = ws.send(Message::Close(frame)).await;
+                        close_handshake_done = true;
+                        break;
+                    }
+                    Some(Err(_)) => break,
                     Some(Ok(Message::Frame(_))) => {}
                 }
             }
@@ -258,11 +323,20 @@ async fn handle_connection(
         }
     }
 
-    let _ = ws.close(None).await;
+    if !close_handshake_done {
+        let _ = ws.close(None).await;
+    } else {
+        let _ = ws.flush().await;
+    }
+
+    if let Some(listener) = on_close_listener.lock().unwrap().clone() {
+        emit_on_close(client_port, close_code, close_reason, listener);
+    }
+
     clients.lock().unwrap().remove(&client_port);
 }
 
-#[boyia_native_object(persistent_callbacks = ["onReceive"])]
+#[boyia_native_object(persistent_callbacks = ["onReceive", "onClose"])]
 pub struct WebSocketServerBuiltins {
     #[boyia_field_default = "0.0.0.0"]
     host: String,
@@ -278,8 +352,10 @@ impl Drop for WebSocketServerBuiltins {
     fn drop(&mut self) {
         if let Some(runtime) = self.runtime.as_ref() {
             runtime.set_on_receive_listener(None);
+            runtime.set_on_close_listener(None);
         }
         self.__boyia_release_onReceive();
+        self.__boyia_release_onClose();
         if let Some(runtime) = self.runtime.take() {
             runtime.stop();
         }
@@ -313,8 +389,10 @@ impl WebSocketServerBuiltins {
     fn stop(&mut self) -> bool {
         if let Some(runtime) = self.runtime.as_ref() {
             runtime.set_on_receive_listener(None);
+            runtime.set_on_close_listener(None);
         }
         self.__boyia_release_onReceive();
+        self.__boyia_release_onClose();
         if let Some(runtime) = self.runtime.take() {
             runtime.stop();
         }
@@ -374,6 +452,29 @@ impl WebSocketServerBuiltins {
             runtime.set_on_receive_listener(None);
         }
         self.__boyia_release_onReceive();
+        true
+    }
+
+    /// Register a persistent callback fired when a client disconnects; non-blocking.
+    /// Callback receives (client port, close code, reason).
+    #[boyia_sync_builtin(method = "onClose", callback = "persistent")]
+    fn on_close(&mut self) -> (u16, u16, String) {
+        let Some(runtime) = self.runtime.as_ref() else {
+            return (0, 0, String::new());
+        };
+        let Some((ctx, callback)) = self.__boyia_callback_onClose() else {
+            return (0, 0, String::new());
+        };
+        runtime.set_on_close_listener(Some(OnCloseListener { ctx, callback }));
+        (0, 0, String::new())
+    }
+
+    #[boyia_sync_builtin(method = "offClose")]
+    fn off_close(&mut self) -> bool {
+        if let Some(runtime) = self.runtime.as_ref() {
+            runtime.set_on_close_listener(None);
+        }
+        self.__boyia_release_onClose();
         true
     }
 
