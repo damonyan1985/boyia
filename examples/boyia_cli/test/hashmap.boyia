@@ -12,6 +12,8 @@ class HashMapTest {
 
         var ports = [8080, 8443, 9000];
         m.put("ports", ports);
+        m.put("pi", 3.14);
+        m.put("rate", 0.5);
 
         BY_Log("size: " + m.size());
         BY_Log("get(1): " + m.get(1));
@@ -24,6 +26,9 @@ class HashMapTest {
         BY_Log("ports[0]: " + gotPorts.get(0));
         BY_Log("ports[1]: " + gotPorts.get(1));
         BY_Log("ports[2]: " + gotPorts.get(2));
+
+        BY_Log("get(pi): " + m.get("pi"));
+        BY_Log("get(rate): " + m.get("rate"));
 
         BY_Log("has(2): " + m.has(2));
         BY_Log("has(99): " + m.has(99));

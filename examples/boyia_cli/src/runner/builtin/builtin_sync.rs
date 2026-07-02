@@ -9,10 +9,11 @@ use boyia_vm::{
 use std::hash::{Hash, Hasher};
 use std::str;
 
-/// Script value: integer, string, or array of integers/strings (used by HashMap and similar builtins).
+/// Script value: integer, float, string, or array (used by HashMap and similar builtins).
 #[derive(Clone, Debug)]
 pub enum BoyiaScalar {
     Int(i64),
+    Float(f64),
     Str(String),
     Arr(Vec<BoyiaScalar>),
 }
@@ -21,6 +22,7 @@ impl PartialEq for BoyiaScalar {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Int(a), Self::Int(b)) => a == b,
+            (Self::Float(a), Self::Float(b)) => a == b,
             (Self::Str(a), Self::Str(b)) => a == b,
             (Self::Arr(a), Self::Arr(b)) => a == b,
             _ => false,
@@ -37,12 +39,16 @@ impl Hash for BoyiaScalar {
                 0u8.hash(state);
                 v.hash(state);
             }
-            Self::Str(v) => {
+            Self::Float(v) => {
                 1u8.hash(state);
+                v.to_bits().hash(state);
+            }
+            Self::Str(v) => {
+                2u8.hash(state);
                 v.hash(state);
             }
             Self::Arr(v) => {
-                2u8.hash(state);
+                3u8.hash(state);
                 v.hash(state);
             }
         }
@@ -53,6 +59,7 @@ impl BoyiaScalar {
     pub fn missing_default_for_key(key: &Self) -> Self {
         match key {
             Self::Int(_) => Self::Int(0),
+            Self::Float(_) => Self::Float(0.0),
             Self::Str(_) => Self::Str(String::new()),
             Self::Arr(_) => Self::Arr(Vec::new()),
         }
@@ -117,6 +124,11 @@ unsafe fn scalar_to_boyia_value(vm: &mut BoyiaVM, scalar: BoyiaScalar) -> Result
             mValue: RealValue {
                 mIntVal: n as LIntPtr,
             },
+        }),
+        BoyiaScalar::Float(n) => Ok(BoyiaValue {
+            mNameKey: 0,
+            mValueType: ValueType::BY_REAL,
+            mValue: RealValue { mRealVal: n },
         }),
         BoyiaScalar::Str(s) => string_to_boyia_value(vm, &s).ok_or(()),
         BoyiaScalar::Arr(items) => scalars_to_boyia_array(vm, items),
@@ -210,6 +222,10 @@ impl<'a> SyncCallSite<'a> {
         }
         if let Some(s) = value_to_string(val) {
             return Some(BoyiaScalar::Str(s));
+        }
+        let v = unsafe { &*val };
+        if v.mValueType == ValueType::BY_REAL {
+            return Some(BoyiaScalar::Float(unsafe { v.mValue.mRealVal }));
         }
         self.arg_int(index).map(BoyiaScalar::Int)
     }
@@ -332,6 +348,7 @@ impl SyncReturn for BoyiaScalar {
     fn set_result(self, vm: &mut BoyiaVM) -> OpHandleResult {
         match self {
             BoyiaScalar::Int(n) => n.set_result(vm),
+            BoyiaScalar::Float(n) => n.set_result(vm),
             BoyiaScalar::Str(s) => s.set_result(vm),
             BoyiaScalar::Arr(items) => set_sync_vec_scalar_return(items, vm),
         }
@@ -375,8 +392,8 @@ fn value_to_scalar(value: *const BoyiaValue) -> Option<BoyiaScalar> {
     }
     let v = unsafe { &*value };
     match v.mValueType {
+        ValueType::BY_REAL => Some(BoyiaScalar::Float(unsafe { v.mValue.mRealVal })),
         ValueType::BY_INT | ValueType::BY_CHAR => Some(BoyiaScalar::Int(unsafe { v.mValue.mIntVal as i64 })),
-        ValueType::BY_REAL => Some(BoyiaScalar::Int(unsafe { v.mValue.mRealVal as i64 })),
         _ => None,
     }
 }
