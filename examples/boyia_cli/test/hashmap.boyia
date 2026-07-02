@@ -15,6 +15,9 @@ class HashMapTest {
         m.put("pi", 3.14);
         m.put("rate", 0.5);
 
+        var config = { "host": "127.0.0.1", "port": 8080, "ratio": 0.75 };
+        m.put("config", config);
+
         BY_Log("size: " + m.size());
         BY_Log("get(1): " + m.get(1));
         BY_Log("get(\"1\"): " + m.get("1"));
@@ -29,6 +32,11 @@ class HashMapTest {
 
         BY_Log("get(pi): " + m.get("pi"));
         BY_Log("get(rate): " + m.get("rate"));
+
+        var cfg = m.get("config");
+        BY_Log("cfg.host: " + cfg.get("host"));
+        BY_Log("cfg.port: " + cfg.get("port"));
+        BY_Log("cfg.ratio: " + cfg.get("ratio"));
 
         BY_Log("has(2): " + m.has(2));
         BY_Log("has(99): " + m.has(99));
