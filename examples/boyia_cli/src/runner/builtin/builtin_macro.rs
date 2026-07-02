@@ -477,6 +477,14 @@ fn is_vec_nested_vec(ty: &Type) -> bool {
     vec_element_type(ty).is_some_and(|inner| type_last_ident(inner).as_deref() == Some("NestedVec"))
 }
 
+fn is_boyia_scalar_type(ty: &Type) -> bool {
+    type_last_ident(ty).as_deref() == Some("BoyiaScalar")
+}
+
+fn is_vec_boyia_scalar(ty: &Type) -> bool {
+    vec_element_type(ty).is_some_and(|inner| is_boyia_scalar_type(inner))
+}
+
 fn is_option_vec_usize(ty: &Type) -> bool {
     let Type::Path(TypePath { path, .. }) = ty else {
         return false;
@@ -702,6 +710,12 @@ fn sync_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> {
         });
     }
 
+    if is_boyia_scalar_type(&arg.ty) {
+        return Ok(quote! {
+            let #name = crate::some_or_end!(site.arg_scalar(#index));
+        });
+    }
+
     let extract = match type_last_ident(&arg.ty).as_deref() {
         Some("String") => quote! { crate::some_or_end!(site.arg_string(#index)) },
         Some("bool") => quote! { crate::some_or_end!(site.arg_bool(#index)) },
@@ -771,8 +785,11 @@ fn validate_sync_return(ty: &Type) -> syn::Result<()> {
     if is_option_vec_usize(ty) {
         return Ok(());
     }
+    if is_vec_boyia_scalar(ty) {
+        return Ok(());
+    }
     match type_last_ident(ty).as_deref() {
-        Some("bool" | "String" | "Handle" | "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" | "f32" | "f64") => {
+        Some("bool" | "String" | "Handle" | "BoyiaScalar" | "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" | "f32" | "f64") => {
             Ok(())
         }
         Some(other) => Err(syn::Error::new_spanned(
@@ -1002,6 +1019,12 @@ fn expand_sync_method(
                 Some(v) => crate::runner::builtin_vec::set_sync_vec_usize_return(v, site.vm()),
                 None => boyia_vm::OpHandleResult::kOpResultEnd,
             }
+        }
+    } else if is_vec_boyia_scalar(&return_ty) {
+        quote! {
+            let __sync_result = #work_call;
+            #state_epilogue
+            crate::runner::builtin_sync::set_sync_vec_scalar_return(__sync_result, site.vm())
         }
     } else if is_option_json_value(&return_ty) {
         quote! {

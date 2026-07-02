@@ -1,0 +1,48 @@
+// HashMap builtin smoke test
+// Run: cargo run -p boyia_cli -- test/hashmap.boyia
+
+class HashMapTest {
+    prop fun run() {
+        var m = new(HashMap);
+
+        m.put(1, 100);
+        m.put("1", "one");
+        m.put("host", "127.0.0.1");
+        m.put(2, 200);
+
+        BY_Log("size: " + m.size());
+        BY_Log("get(1): " + m.get(1));
+        BY_Log("get(\"1\"): " + m.get("1"));
+        BY_Log("get(host): " + m.get("host"));
+        BY_Log("getOr(missing, fallback): " + m.getOr("missing", "fallback"));
+
+        BY_Log("has(2): " + m.has(2));
+        BY_Log("has(99): " + m.has(99));
+
+        var keys = m.keys();
+        BY_Log("keys.size: " + keys.size());
+        var i = 0;
+        while (i < keys.size()) {
+            BY_Log("keys[" + i + "]: " + keys.get(i));
+            i = i + 1;
+        }
+
+        var values = m.values();
+        BY_Log("values.size: " + values.size());
+        i = 0;
+        while (i < values.size()) {
+            BY_Log("values[" + i + "]: " + values.get(i));
+            i = i + 1;
+        }
+
+        BY_Log("remove(2): " + m.remove(2));
+        BY_Log("size after remove: " + m.size());
+
+        m.clear();
+        BY_Log("size after clear: " + m.size());
+        BY_Log("HashMap test done");
+    }
+};
+
+var test = new(HashMapTest);
+test.run();

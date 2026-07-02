@@ -1,11 +1,118 @@
 //! Sync builtin infrastructure: safe arg extraction and Rust return → BoyiaValue.
 
 use boyia_vm::{
-    create_native_string, create_string_object, get_local_size, get_local_value, set_int_result,
-    set_native_result, BoyiaClass, BoyiaFunction, BoyiaValue, BuiltinId, K_BOYIA_NULL,
-    OpHandleResult, RealValue, ValueType, LInt, LInt8, LIntPtr, BoyiaVM,
+    copy_object, create_native_string, create_string_object, get_function_count, get_local_size,
+    get_local_value, set_int_result, set_native_result, value_copy, vector_params_grow_if_full,
+    BoyiaClass, BoyiaFunction, BoyiaValue, BuiltinId, K_BOYIA_NULL, OpHandleResult, RealValue,
+    ValueType, LInt, LInt8, LIntPtr, BoyiaVM,
 };
+use std::hash::{Hash, Hasher};
 use std::str;
+
+/// Script scalar: integer or string (used by HashMap and similar builtins).
+#[derive(Clone, Debug)]
+pub enum BoyiaScalar {
+    Int(i64),
+    Str(String),
+}
+
+impl PartialEq for BoyiaScalar {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Int(a), Self::Int(b)) => a == b,
+            (Self::Str(a), Self::Str(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for BoyiaScalar {}
+
+impl Hash for BoyiaScalar {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Self::Int(v) => {
+                0u8.hash(state);
+                v.hash(state);
+            }
+            Self::Str(v) => {
+                1u8.hash(state);
+                v.hash(state);
+            }
+        }
+    }
+}
+
+impl BoyiaScalar {
+    pub fn missing_default_for_key(key: &Self) -> Self {
+        match key {
+            Self::Int(_) => Self::Int(0),
+            Self::Str(_) => Self::Str(String::new()),
+        }
+    }
+}
+
+pub fn set_sync_vec_scalar_return(items: Vec<BoyiaScalar>, vm: &mut BoyiaVM) -> OpHandleResult {
+    unsafe {
+        match scalars_to_boyia_array(vm, items) {
+            Ok(mut out) => {
+                set_native_result(&mut out, vm);
+                OpHandleResult::kOpResultSuccess
+            }
+            Err(_) => OpHandleResult::kOpResultEnd,
+        }
+    }
+}
+
+unsafe fn scalars_to_boyia_array(vm: &mut BoyiaVM, items: Vec<BoyiaScalar>) -> Result<BoyiaValue, ()> {
+    let raw = copy_object(BuiltinId::kBoyiaArray.as_key(), 32, vm);
+    if raw.is_null() {
+        return Err(());
+    }
+    let mut out = BoyiaValue {
+        mNameKey: 0,
+        mValueType: ValueType::BY_CLASS,
+        mValue: RealValue {
+            mObj: BoyiaClass {
+                mPtr: raw as LIntPtr,
+                mSuper: K_BOYIA_NULL,
+            },
+        },
+    };
+    for item in items {
+        let elem = scalar_to_boyia_value(vm, item)?;
+        array_add(vm, &mut out, &elem)?;
+    }
+    Ok(out)
+}
+
+unsafe fn array_add(vm: &mut BoyiaVM, arr_obj: *mut BoyiaValue, val: &BoyiaValue) -> Result<(), ()> {
+    let fun = (*arr_obj).mValue.mObj.mPtr as *mut BoyiaFunction;
+    if fun.is_null() {
+        return Err(());
+    }
+    let cap = get_function_count(fun);
+    if (*fun).mParamSize >= cap && !vector_params_grow_if_full(fun, vm) {
+        return Err(());
+    }
+    let dst = (*fun).mParams.add((*fun).mParamSize as usize);
+    value_copy(dst, val);
+    (*fun).mParamSize += 1;
+    Ok(())
+}
+
+unsafe fn scalar_to_boyia_value(vm: &mut BoyiaVM, scalar: BoyiaScalar) -> Result<BoyiaValue, ()> {
+    match scalar {
+        BoyiaScalar::Int(n) => Ok(BoyiaValue {
+            mNameKey: 0,
+            mValueType: ValueType::BY_INT,
+            mValue: RealValue {
+                mIntVal: n as LIntPtr,
+            },
+        }),
+        BoyiaScalar::Str(s) => string_to_boyia_value(vm, &s).ok_or(()),
+    }
+}
 
 /// Safe view of VM locals for one synchronous native call (no callback local).
 pub struct SyncCallSite<'a> {
@@ -82,6 +189,17 @@ impl<'a> SyncCallSite<'a> {
     /// Callback local for tuple-return sync builtins: `size - 2` (before `this`).
     pub fn capture_callback(&mut self) -> Option<crate::runner::builtin_async::ScriptCallback> {
         crate::runner::builtin_async::capture_script_callback(self.vm, self.size - 2)
+    }
+
+    pub fn arg_scalar(&mut self, index: LInt) -> Option<BoyiaScalar> {
+        let val = unsafe { get_local_value(index, self.vm) as *const BoyiaValue };
+        if val.is_null() {
+            return None;
+        }
+        if let Some(s) = value_to_string(val) {
+            return Some(BoyiaScalar::Str(s));
+        }
+        self.arg_int(index).map(BoyiaScalar::Int)
     }
 
     fn arg_int(&mut self, index: LInt) -> Option<i64> {
@@ -194,6 +312,15 @@ impl SyncReturn for Option<String> {
                 }
                 OpHandleResult::kOpResultSuccess
             }
+        }
+    }
+}
+
+impl SyncReturn for BoyiaScalar {
+    fn set_result(self, vm: &mut BoyiaVM) -> OpHandleResult {
+        match self {
+            BoyiaScalar::Int(n) => n.set_result(vm),
+            BoyiaScalar::Str(s) => s.set_result(vm),
         }
     }
 }
