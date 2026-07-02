@@ -1,4 +1,4 @@
-//! HashMap builtin: keys and values are integers or strings.
+//! HashMap builtin: keys are integers or strings; values may also be arrays.
 
 #![allow(dead_code)]
 
@@ -67,7 +67,7 @@ impl HashMapBuiltins {
         self.entries.keys().cloned().collect()
     }
 
-    /// All values as a Boyia Array (each element is int or string).
+    /// All values as a Boyia Array (each element is int, string, or array).
     #[boyia_sync_builtin(method = "values")]
     fn values(&self) -> Vec<BoyiaScalar> {
         self.entries.values().cloned().collect()

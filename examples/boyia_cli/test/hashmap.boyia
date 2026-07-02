@@ -10,11 +10,20 @@ class HashMapTest {
         m.put("host", "127.0.0.1");
         m.put(2, 200);
 
+        var ports = [8080, 8443, 9000];
+        m.put("ports", ports);
+
         BY_Log("size: " + m.size());
         BY_Log("get(1): " + m.get(1));
         BY_Log("get(\"1\"): " + m.get("1"));
         BY_Log("get(host): " + m.get("host"));
         BY_Log("getOr(missing, fallback): " + m.getOr("missing", "fallback"));
+
+        var gotPorts = m.get("ports");
+        BY_Log("ports.size: " + gotPorts.size());
+        BY_Log("ports[0]: " + gotPorts.get(0));
+        BY_Log("ports[1]: " + gotPorts.get(1));
+        BY_Log("ports[2]: " + gotPorts.get(2));
 
         BY_Log("has(2): " + m.has(2));
         BY_Log("has(99): " + m.has(99));

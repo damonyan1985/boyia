@@ -1,19 +1,20 @@
 //! Sync builtin infrastructure: safe arg extraction and Rust return → BoyiaValue.
 
 use boyia_vm::{
-    copy_object, create_native_string, create_string_object, get_function_count, get_local_size,
-    get_local_value, set_int_result, set_native_result, value_copy, vector_params_grow_if_full,
-    BoyiaClass, BoyiaFunction, BoyiaValue, BuiltinId, K_BOYIA_NULL, OpHandleResult, RealValue,
-    ValueType, LInt, LInt8, LIntPtr, BoyiaVM,
+    copy_object, create_native_string, create_string_object, get_boyia_class_id, get_function_count,
+    get_local_size, get_local_value, set_int_result, set_native_result, value_copy,
+    vector_params_grow_if_full, BoyiaClass, BoyiaFunction, BoyiaValue, BuiltinId, K_BOYIA_NULL,
+    OpHandleResult, RealValue, ValueType, LInt, LInt8, LIntPtr, BoyiaVM,
 };
 use std::hash::{Hash, Hasher};
 use std::str;
 
-/// Script scalar: integer or string (used by HashMap and similar builtins).
+/// Script value: integer, string, or array of integers/strings (used by HashMap and similar builtins).
 #[derive(Clone, Debug)]
 pub enum BoyiaScalar {
     Int(i64),
     Str(String),
+    Arr(Vec<BoyiaScalar>),
 }
 
 impl PartialEq for BoyiaScalar {
@@ -21,6 +22,7 @@ impl PartialEq for BoyiaScalar {
         match (self, other) {
             (Self::Int(a), Self::Int(b)) => a == b,
             (Self::Str(a), Self::Str(b)) => a == b,
+            (Self::Arr(a), Self::Arr(b)) => a == b,
             _ => false,
         }
     }
@@ -39,6 +41,10 @@ impl Hash for BoyiaScalar {
                 1u8.hash(state);
                 v.hash(state);
             }
+            Self::Arr(v) => {
+                2u8.hash(state);
+                v.hash(state);
+            }
         }
     }
 }
@@ -48,6 +54,7 @@ impl BoyiaScalar {
         match key {
             Self::Int(_) => Self::Int(0),
             Self::Str(_) => Self::Str(String::new()),
+            Self::Arr(_) => Self::Arr(Vec::new()),
         }
     }
 }
@@ -97,6 +104,7 @@ unsafe fn array_add(vm: &mut BoyiaVM, arr_obj: *mut BoyiaValue, val: &BoyiaValue
     }
     let dst = (*fun).mParams.add((*fun).mParamSize as usize);
     value_copy(dst, val);
+    (*dst).mNameKey = 0;
     (*fun).mParamSize += 1;
     Ok(())
 }
@@ -111,6 +119,7 @@ unsafe fn scalar_to_boyia_value(vm: &mut BoyiaVM, scalar: BoyiaScalar) -> Result
             },
         }),
         BoyiaScalar::Str(s) => string_to_boyia_value(vm, &s).ok_or(()),
+        BoyiaScalar::Arr(items) => scalars_to_boyia_array(vm, items),
     }
 }
 
@@ -195,6 +204,9 @@ impl<'a> SyncCallSite<'a> {
         let val = unsafe { get_local_value(index, self.vm) as *const BoyiaValue };
         if val.is_null() {
             return None;
+        }
+        if let Some(items) = unsafe { value_to_scalar_array(val) } {
+            return Some(BoyiaScalar::Arr(items));
         }
         if let Some(s) = value_to_string(val) {
             return Some(BoyiaScalar::Str(s));
@@ -321,7 +333,51 @@ impl SyncReturn for BoyiaScalar {
         match self {
             BoyiaScalar::Int(n) => n.set_result(vm),
             BoyiaScalar::Str(s) => s.set_result(vm),
+            BoyiaScalar::Arr(items) => set_sync_vec_scalar_return(items, vm),
         }
+    }
+}
+
+unsafe fn value_to_scalar_array(value: *const BoyiaValue) -> Option<Vec<BoyiaScalar>> {
+    if value.is_null() || (*value).mValueType != ValueType::BY_CLASS {
+        return None;
+    }
+    if get_boyia_class_id(value) != BuiltinId::kBoyiaArray.as_key() {
+        return None;
+    }
+    let fun = (*value).mValue.mObj.mPtr as *const BoyiaFunction;
+    if fun.is_null() {
+        return Some(Vec::new());
+    }
+    if (*fun).mParams.is_null() {
+        return Some(Vec::new());
+    }
+    let mut items = Vec::with_capacity((*fun).mParamSize as usize);
+    for i in 0..(*fun).mParamSize {
+        let prop = (*fun).mParams.add(i as usize);
+        if matches!(
+            (*prop).mValueType,
+            ValueType::BY_NAV_FUNC | ValueType::BY_FUNC | ValueType::BY_PROP_FUNC
+        ) {
+            continue;
+        }
+        items.push(value_to_scalar(prop as *const BoyiaValue)?);
+    }
+    Some(items)
+}
+
+fn value_to_scalar(value: *const BoyiaValue) -> Option<BoyiaScalar> {
+    if let Some(s) = value_to_string(value) {
+        return Some(BoyiaScalar::Str(s));
+    }
+    if value.is_null() {
+        return None;
+    }
+    let v = unsafe { &*value };
+    match v.mValueType {
+        ValueType::BY_INT | ValueType::BY_CHAR => Some(BoyiaScalar::Int(unsafe { v.mValue.mIntVal as i64 })),
+        ValueType::BY_REAL => Some(BoyiaScalar::Int(unsafe { v.mValue.mRealVal as i64 })),
+        _ => None,
     }
 }
 
