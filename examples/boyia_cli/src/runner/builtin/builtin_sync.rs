@@ -291,6 +291,11 @@ impl<'a> SyncCallSite<'a> {
         crate::runner::builtin_async::capture_script_callback(self.vm, self.size - 2)
     }
 
+    /// Like [`capture_callback`] for `callback = "persistent"` builtins.
+    pub fn capture_callback_persistent(&mut self) -> Option<crate::runner::builtin_async::ScriptCallback> {
+        crate::runner::builtin_async::capture_script_callback_persistent(self.vm, self.size - 2)
+    }
+
     pub fn arg_scalar(&mut self, index: LInt) -> Option<BoyiaScalar> {
         let val = unsafe { get_local_value(index, self.vm) as *const BoyiaValue };
         unsafe { boyia_value_to_scalar(self.vm, val) }

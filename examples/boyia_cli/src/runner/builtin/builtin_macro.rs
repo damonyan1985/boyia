@@ -973,7 +973,7 @@ fn expand_sync_method(
         let method_suffix = method_suffix_ident(&config.method.value());
         let bind_fn = format_ident!("__boyia_bind_{}", method_suffix);
         quote! {
-            let __persistent_cb = crate::some_or_end!(site.capture_callback());
+            let __persistent_cb = crate::some_or_end!(site.capture_callback_persistent());
             let __persistent_ctx = crate::some_or_end!(crate::runner::builtin_ctx::BuiltinCtx::from_vm(site.vm()));
             state.#bind_fn(__persistent_ctx, __persistent_cb);
         }

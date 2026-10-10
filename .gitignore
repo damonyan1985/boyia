@@ -4,4 +4,6 @@ node_modules/
 dist/
 Cargo.lock
 boyia_cli_demo.txt
+.python-version
 .DS_Store
+CAUTIONS

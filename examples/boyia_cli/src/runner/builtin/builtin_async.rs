@@ -50,6 +50,16 @@ pub fn capture_script_callback(vm: &mut BoyiaVM, index: LInt) -> Option<ScriptCa
     unsafe { make_callback_info(vm, val) }.map(ScriptCallback)
 }
 
+/// Persistent registration (`onReceive` / `onClose`): keep anonym closure alive across `pop_scene`.
+pub fn capture_script_callback_persistent(vm: &mut BoyiaVM, index: LInt) -> Option<ScriptCallback> {
+    let val = unsafe { get_local_value(index, vm) as *const BoyiaValue };
+    unsafe {
+        boyia_vm::anonym_fun_hold_for_persistent_callback(val);
+        make_callback_info(vm, val)
+    }
+    .map(ScriptCallback)
+}
+
 /// Invoke a one-shot script callback with typed arguments, then release captures.
 pub fn invoke_script_callback(
     vm: &mut BoyiaVM,
@@ -224,9 +234,8 @@ macro_rules! some_or_end {
 
 #[derive(Clone, Copy)]
 struct CallbackInfo {
-    name_key: LUintPtr,
-    value_type: ValueType,
-    func_ptr: LIntPtr,
+    /// Shallow copy of the script callback (`mSuper` pinned separately via `object_global`).
+    callee: BoyiaValue,
     object_global: *mut Global,
 }
 
@@ -270,9 +279,7 @@ unsafe fn make_callback_info(vm: &mut BoyiaVM, callback_val: *const BoyiaValue) 
         }
     };
     Some(CallbackInfo {
-        name_key: (*callback_val).mNameKey,
-        value_type: (*callback_val).mValueType,
-        func_ptr: (*callback_val).mValue.mObj.mPtr,
+        callee: *callback_val,
         object_global,
     })
 }
@@ -412,32 +419,17 @@ unsafe fn invoke_script_callback_impl(
     arg_values: &mut [BoyiaValue],
     release_after_call: bool,
 ) -> bool {
-    let cb_fun = callback.func_ptr as *mut BoyiaFunction;
+    let cb_fun = callback.callee.mValue.mObj.mPtr as *mut BoyiaFunction;
     if cb_fun.is_null() {
         release_script_callback_captures(vm, &callback);
         return false;
     }
 
-    let obj_super = if callback.object_global.is_null() {
-        K_BOYIA_NULL
-    } else {
-        (*callback.object_global).value().mValue.mObj.mPtr
-    };
-
-    let callback_value = BoyiaValue {
-        mNameKey: callback.name_key,
-        mValueType: callback.value_type,
-        mValue: RealValue {
-            mObj: BoyiaClass {
-                mPtr: callback.func_ptr,
-                mSuper: obj_super,
-            },
-        },
-    };
+    let obj_super = callback.callee.mValue.mObj.mSuper;
 
     let arity = 1 + arg_values.len();
     let mut call_args = Vec::with_capacity(arity);
-    call_args.push(callback_value);
+    call_args.push(callback.callee);
     call_args.extend_from_slice(arg_values);
 
     if !(*cb_fun).mParams.is_null() {
@@ -498,7 +490,7 @@ unsafe fn callback_async_result(
         return;
     };
 
-    let cb_fun = callback.func_ptr as *mut BoyiaFunction;
+    let cb_fun = callback.callee.mValue.mObj.mPtr as *mut BoyiaFunction;
     if cb_fun.is_null() {
         if !callback.object_global.is_null() {
             runtime.remove_persistent(callback.object_global);
@@ -506,24 +498,9 @@ unsafe fn callback_async_result(
         return;
     }
 
-    let obj_super = if callback.object_global.is_null() {
-        K_BOYIA_NULL
-    } else {
-        (*callback.object_global).value().mValue.mObj.mPtr
-    };
+    let obj_super = callback.callee.mValue.mObj.mSuper;
 
-    let callback_value = BoyiaValue {
-        mNameKey: callback.name_key,
-        mValueType: callback.value_type,
-        mValue: RealValue {
-            mObj: BoyiaClass {
-                mPtr: callback.func_ptr,
-                mSuper: obj_super,
-            },
-        },
-    };
-
-    let mut args = [callback_value, map_val];
+    let mut args = [callback.callee, map_val];
     if !(*cb_fun).mParams.is_null() {
         args[1].mNameKey = (*(*cb_fun).mParams).mNameKey;
     }

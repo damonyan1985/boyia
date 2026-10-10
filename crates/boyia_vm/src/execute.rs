@@ -537,7 +537,7 @@ pub(crate) unsafe fn handle_push_scene(inst: Option<&Instruction>, vm: &mut Boyi
 }
 
 /// HandlePopScene per BoyiaCore.cpp: if mFrameIndex > 0, when `inst` is null (ExecPopFunction path) and
-/// callee slot 0 is `BY_ANONYM_FUNC`, clear ptr and `delete_data` the PushArg-cloned `BoyiaFunction` + `mParams`;
+/// callee slot 0 is `BY_ANONYM_FUNC`, [`release_anonym_fun_persistent_meta`] (persistent meta + free cloned `fun`/`mParams`);
 /// then --mFrameIndex and restore mLValSize, mPC, mContext, mLoopSize, AssignStateClass.
 unsafe fn handle_pop_scene(inst: Option<&Instruction>, vm: &mut BoyiaVM) -> OpHandleResult {
     let e_state = (*vm).mEState;
@@ -551,15 +551,7 @@ unsafe fn handle_pop_scene(inst: Option<&Instruction>, vm: &mut BoyiaVM) -> OpHa
             && (*callee).mValue.mObj.mPtr != K_BOYIA_NULL
         {
             let fun = (*callee).mValue.mObj.mPtr as *mut BoyiaFunction;
-            let params = (*fun).mParams;
-            (*callee).mValue.mObj.mPtr = K_BOYIA_NULL;
-            let creator = (*vm).mCreator;
-            if !creator.is_null() {
-                (*creator).delete_data(fun as *mut LVoid);
-                if !params.is_null() {
-                    (*creator).delete_data(params as *mut LVoid);
-                }
-            }
+            release_anonym_fun_persistent_meta(&mut *vm, fun, callee);
         }
     }
     (*e_state).mFrameIndex -= 1;
@@ -574,6 +566,7 @@ unsafe fn handle_pop_scene(inst: Option<&Instruction>, vm: &mut BoyiaVM) -> OpHa
 
 /// Append copies of current-frame locals `mLocals[start+1 .. mLValSize)` into `fun`'s capture tail
 /// (`mParams[mParamSize + mCaptureCount]`), incrementing `mCaptureCount` only. Slot `start` is the callee pointer.
+/// Reserves one trailing `mParams` slot with `BY_ARG` for a persistent `Global*` (`BY_INT`) after `persistent_object`.
 unsafe fn capture_current_frame_locals_into_function(
     vm: &mut BoyiaVM,
     fun: *mut BoyiaFunction,
@@ -615,7 +608,84 @@ unsafe fn capture_current_frame_locals_into_function(
         (*fun).mCaptureCount += 1;
         idx += 1;
     }
+    while (*fun).mParamSize + (*fun).mCaptureCount >= crate::core::get_function_count(fun) {
+        if !vector_params_grow_if_full(fun, vm) {
+            return OpHandleResult::kOpResultEnd;
+        }
+    }
+    let meta_idx = (*fun).mParamSize + (*fun).mCaptureCount;
+    let meta = (*fun).mParams.add(meta_idx as usize);
+    (*meta).mNameKey = 0;
+    (*meta).mValueType = ValueType::BY_ARG;
+    (*meta).mValue.mIntVal = K_BOYIA_NULL;
     OpHandleResult::kOpResultSuccess
+}
+
+/// Slot after formal params + captures; holds `*mut Global` as `BY_INT` when persistent (not counted in `mCaptureCount`).
+#[inline]
+unsafe fn anonym_fun_persistent_meta_slot(fun: *mut BoyiaFunction) -> *mut BoyiaValue {
+    if fun.is_null() || (*fun).mParams.is_null() {
+        return ptr::null_mut();
+    }
+    let idx = (*fun).mParamSize + (*fun).mCaptureCount;
+    if idx >= crate::core::get_function_count(fun) {
+        return ptr::null_mut();
+    }
+    (*fun).mParams.add(idx as usize)
+}
+
+/// After `handle_push_arg`, meta is `BY_INT` with a `Global*`. Call when registering a **persistent** script
+/// callback so `pop_scene` will not [`release_anonym_fun_persistent_meta`] (meta must not be `BY_INT`).
+/// Leaves `mIntVal` intact for later explicit `remove_persistent`.
+pub unsafe fn anonym_fun_hold_for_persistent_callback(value: *const BoyiaValue) {
+    if value.is_null() || (*value).mValueType != ValueType::BY_ANONYM_FUNC {
+        return;
+    }
+    let fun = (*value).mValue.mObj.mPtr as *mut BoyiaFunction;
+    if fun.is_null() {
+        return;
+    }
+    let slot = anonym_fun_persistent_meta_slot(fun);
+    if slot.is_null() || (*slot).mValueType != ValueType::BY_INT {
+        return;
+    }
+    (*slot).mValueType = ValueType::BY_ARG;
+}
+
+unsafe fn release_anonym_fun_persistent_meta(
+    vm: &mut BoyiaVM,
+    fun: *mut BoyiaFunction,
+    callee: *mut BoyiaValue,
+) {
+    if fun.is_null() {
+        return;
+    }
+    let slot = anonym_fun_persistent_meta_slot(fun);
+    if slot.is_null() || (*slot).mValueType != ValueType::BY_INT {
+        return;
+    }
+    let global = (*slot).mValue.mIntVal as *mut crate::Global;
+    if !global.is_null() {
+        let rt = get_runtime_from_vm(vm);
+        if !rt.is_null() {
+            (*rt).remove_persistent(global);
+        }
+    }
+    (*slot).mNameKey = 0;
+    (*slot).mValueType = ValueType::BY_ARG;
+    (*slot).mValue.mIntVal = K_BOYIA_NULL;
+
+    let params = (*fun).mParams;
+    if !callee.is_null() {
+        (*callee).mValue.mObj.mPtr = K_BOYIA_NULL;
+    }
+    let creator = vm.mCreator;
+    if !creator.is_null() {
+        (*creator).delete_data(fun as *mut LVoid);
+        if !params.is_null() {
+            (*creator).delete_data(params as *mut LVoid);
+        }
+    }
 }
 
 unsafe fn handle_push_arg(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
@@ -643,7 +713,15 @@ unsafe fn handle_push_arg(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleR
             (*value).mValue.mObj.mPtr = fun as LIntPtr;
             let rt = get_runtime_from_vm(vm);
             if !rt.is_null() {
-                let _ = (*rt).persistent_object(value as *const BoyiaValue);
+                let global = (*rt).persistent_object(value as *const BoyiaValue);
+                if !global.is_null() {
+                    let slot = anonym_fun_persistent_meta_slot(fun);
+                    if !slot.is_null() {
+                        (*slot).mNameKey = 0;
+                        (*slot).mValueType = ValueType::BY_INT;
+                        (*slot).mValue.mIntVal = global as LIntPtr;
+                    }
+                }
             }
         }
     }
