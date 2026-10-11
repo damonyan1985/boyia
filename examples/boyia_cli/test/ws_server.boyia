@@ -22,16 +22,16 @@ class WsEchoServer {
         BY_Log("WebSocketServer: listening (Ctrl+C to stop)");
         BY_Log("Run client: python3 test/ws_client.py");
 
-        this.server.onReceive(fun(clientPort, msg) {
+        this.server.onReceive(fun(channelId, peerPort, msg) {
             if (msg == "") {
                 return;
             }
-            BY_Log("received on port " + clientPort + ": " + msg);
-            this.server.send(clientPort, "echo: " + msg);
+            BY_Log("received ch=" + channelId + " peerPort=" + peerPort + ": " + msg);
+            this.server.send(channelId, "echo: " + msg);
         });
 
-        this.server.onClose(fun(clientPort, closeCode, reason) {
-            BY_Log("client closed port:  " + clientPort + ", code: " + closeCode + ", reason: " + reason);
+        this.server.onClose(fun(channelId, peerPort, closeCode, reason) {
+            BY_Log("closed ch=" + channelId + " peerPort=" + peerPort + ", code: " + closeCode + ", reason: " + reason);
         });
     }
 };
