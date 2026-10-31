@@ -88,6 +88,8 @@ Script resolution:
 Relative paths in {RC_FILE_NAME} are resolved against that file's directory.
 Environment:
   BOYIA_INIT_MINIMAL=1   skip registering CLI builtin classes (faster init)
+  BOYIA_ENABLE_DYLIB_BUILTINS=1|0   force enable/disable dylib plugins (default: on if <exe-dir>/plugins has a dylib)
+  BOYIA_PLUGIN_DIRS=<paths>   override plugin dirs (; or : separated)
 "
     );
 }

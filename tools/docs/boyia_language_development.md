@@ -236,7 +236,8 @@ Boyia 的 builtin 分为两层：
 | 层级 | Crate / 目录 | 全局类 | 注册时机 |
 |------|----------------|--------|----------|
 | 运行时核心 | `crates/boyia_builtins` | `String`、`Map`、`Array`、`MicroTask` | `boyia_runtime` 初始化时自动注册 |
-| CLI 扩展 | `examples/boyia_cli/src/builtins` | `File`、`Https`、`Zip`、`Json`、`OS`、`Tensor`、`Config` 等 | CLI 启动时通过 `DEFAULT_BUILTINS` 注册 |
+| CLI 扩展 | `examples/boyia_cli/src/builtins` | `File`、`Https`、`Json`、`OS`、`Tensor`、`Config` 等 | CLI 启动时通过 `DEFAULT_BUILTINS` 注册 |
+| CLI 插件 | `examples/boyia_*_plugin`（cdylib） | 如 `Zip` | `BOYIA_ENABLE_DYLIB_BUILTINS=1` 时加载，见 [boyia_plugin.md](./boyia_plugin.md) |
 
 CLI 侧目录与入口：
 
@@ -247,9 +248,9 @@ CLI 侧目录与入口：
 | `builtins/ai/tensor.rs` | `Tensor` 工厂与句柄管理 |
 | `builtins/mod.rs` | `DEFAULT_BUILTINS` 注册表 |
 | `runner/async.rs`、`runner/sync.rs` | 异步 / 同步 native 基础设施 |
-| `runner/builtin/builtin_macro.rs` | 过程宏 `#[boyia_class]` 等（`boyia_cli` 的 `[lib]` proc-macro） |
-| `runner/builtin/builtin_json.rs` | Boyia 值 ↔ `serde_json::Value` |
-| `runner/builtin/builtin_vec.rs` | Boyia Array ↔ `Vec<usize>` / 嵌套 `NestedVec` |
+| `crates/boyia_builtin_macro` | 过程宏 `#[boyia_class]` 等 |
+| `examples/boyia_plugin_sdk/src/runner/builtin_json.rs` | Boyia 值 ↔ `serde_json::Value` |
+| `examples/boyia_plugin_sdk/src/runner/builtin_vec.rs` | Boyia Array ↔ `Vec<usize>` / 嵌套 `NestedVec` |
 
 > **说明**：`Json` 已从 `boyia_builtins` 迁出，同步与异步 JSON 能力统一由 CLI 的 `Json` 类提供；仅使用 `boyia_runtime` 而不注册 CLI builtins 时，不会有 `Json` / `Tensor` 等 CLI 类。
 
@@ -282,7 +283,7 @@ CLI 启动流程：`BoyiaRunner::compile_file` 编译入口及 `require` 依赖�
 
 ```rust
 use crate::runner::r#async::AsyncBuiltinResult;
-use builtin_macro::boyia_class;
+use boyia_builtin_macro::boyia_class;
 use serde_json::Value as JsonValue;
 
 struct FileBuiltins;
@@ -352,13 +353,14 @@ pub const DEFAULT_BUILTINS: &[BuiltinRegistrar] = &[
     utility::https::builtin_https_class,
     utility::file::builtin_file_class,
     utility::os::builtin_os_class,
-    utility::zip::builtin_zip_class,
     utility::json::builtin_json_class,
     ai::tensor::builtin_tensor_class,
 ];
 ```
 
-`BoyiaRunner::create(registrars)` 会在 Boyia 任务线程上依次调用这些 `registrar`。
+`Zip` 已改为可选动态库插件（`examples/boyia_zip_plugin`），见 [boyia_plugin.md](./boyia_plugin.md)。
+
+`BoyiaRunner::create(registrars)` 会在 Boyia 任务线程上依次调用这些 `registrar`；启用插件时还会追加 dylib 导出的 registrar。
 
 ### 6.2 异步 Builtins：`AsyncBuiltinResult`
 
@@ -431,7 +433,7 @@ class Demo {
 | 文件 | 职责 |
 |------|------|
 | `builtins/utility/json.rs` | `#[boyia_class]` 定义：`parse`、`toString`、`asyncParse`、`asyncToString` |
-| `runner/builtin/builtin_json.rs` | Boyia 值 ↔ `serde_json::Value` 转换，供宏与 `AsyncBuiltinResult::OkJson` 使用 |
+| `examples/boyia_plugin_sdk/src/runner/builtin_json.rs` | Boyia 值 ↔ `serde_json::Value` 转换，供宏与 `AsyncBuiltinResult::OkJson` 使用 |
 
 脚本 API：
 
@@ -515,7 +517,7 @@ Rust 侧 `.map(store_tensor)` 是标准库 **`Option::map`**：仅当 `BoyiaTens
 典型写法（源码见 `builtins/external/config.rs`）：
 
 ```rust
-use builtin_macro::{boyia_class, boyia_native_object};
+use boyia_builtin_macro::{boyia_class, boyia_native_object};
 
 #[boyia_native_object]
 pub struct ConfigBuiltins {
@@ -743,4 +745,4 @@ d.run();
 
 ---
 
-**延伸阅读：** [仓库 README](../../README.md) · [Boyia IDE 扩展](../plugin/README.md) · [Builtin Native 对象映射](./builtin_struct_fields_mapping.md)
+**延伸阅读：** [仓库 README](../../README.md) · [Boyia IDE 扩展](../plugin/README.md) · [动态库 Builtin 插件](./boyia_plugin.md) · [Builtin Native 对象映射](./builtin_struct_fields_mapping.md)

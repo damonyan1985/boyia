@@ -1,0 +1,18 @@
+[package]
+name = "boyia_plugin_sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Shared builtin registrar, async/sync helpers for boyia_cli and dylib plugins"
+
+[features]
+default = ["host-exe-plugins"]
+# Host loads plugins from {current_exe}/plugins (see layout::default_plugin_dirs).
+host-exe-plugins = []
+# Plugin build.rs: copy cdylib to target/{profile}/plugins/ after link.
+build-install = []
+
+[dependencies]
+boyia_builtins = { path = "../../crates/boyia_builtins" }
+boyia_runtime = { path = "../../crates/boyia_runtime" }
+boyia_vm = { path = "../../crates/boyia_vm" }
+serde_json = "1.0.149"

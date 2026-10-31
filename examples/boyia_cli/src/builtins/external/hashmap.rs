@@ -2,8 +2,8 @@
 
 #![allow(dead_code)]
 
-use builtin_macro::{boyia_class, boyia_native_object};
-use crate::runner::builtin_sync::BoyiaScalar;
+use boyia_builtin_macro::{boyia_class, boyia_native_object};
+use boyia_plugin_sdk::BoyiaScalar;
 use std::collections::HashMap as StdHashMap;
 
 #[boyia_native_object]

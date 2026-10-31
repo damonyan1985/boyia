@@ -1,0 +1,25 @@
+// Zip smoke test — paths relative to examples/boyia_cli (main.rs sets cwd via CARGO_MANIFEST_DIR).
+
+class ZipSmoke {
+    prop fun run() {
+        BY_Log("Zip test begin");
+        Zip.compress("test/assets/zip_fixture", "test/out/smoke.zip", "", fun(result) {
+            if (result.get("status") != "ok") {
+                BY_Log("compress fail: " + result.get("message"));
+                return;
+            }
+            BY_Log("compress ok");
+            Zip.extract("test/out/smoke.zip", "test/out/smoke_out", "", fun(result2) {
+                if (result2.get("status") != "ok") {
+                    BY_Log("extract fail: " + result2.get("message"));
+                    return;
+                }
+                BY_Log("extract ok");
+                BY_Log("Zip test done");
+            });
+        });
+    }
+};
+
+var t = new(ZipSmoke);
+t.run();

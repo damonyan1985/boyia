@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use builtin_macro::boyia_class;
+use boyia_builtin_macro::boyia_class;
 use std::env;
 use std::time::Duration;
 

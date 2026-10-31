@@ -575,12 +575,3 @@ pub fn push_callback_f64(value: f64, _vm: &mut BoyiaVM) -> Option<BoyiaValue> {
 pub fn push_callback_string(value: String, vm: &mut BoyiaVM) -> Option<BoyiaValue> {
     unsafe { string_to_boyia_value(vm, &value) }
 }
-
-#[macro_export]
-macro_rules! define_sync_native {
-    ($native:ident, $min:expr, $handler:ident) => {
-        unsafe fn $native(vm: &mut boyia_vm::BoyiaVM) -> boyia_vm::OpHandleResult {
-            $crate::runner::builtin_sync::sync_dispatch(vm, $min, $handler)
-        }
-    };
-}

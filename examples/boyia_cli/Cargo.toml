@@ -4,11 +4,6 @@ version = "0.1.0"
 edition = "2021"
 description = "CLI: run Boyia script with BoyiaRuntime (compile, run, BY_Log)"
 
-[lib]
-name = "builtin_macro"
-proc-macro = true
-path = "src/runner/builtin/builtin_macro.rs"
-
 [[bin]]
 name = "boyia_cli"
 path = "src/main.rs"
@@ -16,16 +11,16 @@ path = "src/main.rs"
 [dependencies]
 boyia_builtins = { path = "../../crates/boyia_builtins" }
 boyia_gc = { path = "../../crates/boyia_gc" }
+boyia_plugin_sdk = { path = "../boyia_plugin_sdk" }
+boyia_builtin_macro = { path = "../../crates/boyia_builtin_macro" }
 boyia_runtime = { path = "../../crates/boyia_runtime" }
 boyia_vm = { path = "../../crates/boyia_vm" }
+libloading = "0.8"
 reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "rustls"] }
 serde_json = "1.0.149"
 rand = "0.9"
 walkdir = "2.5"
 zip = { version = "2", default-features = false, features = ["deflate", "aes-crypto"] }
-proc-macro2 = "1"
-quote = "1"
-syn = { version = "2", features = ["full"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "net", "macros"] }
 tokio-tungstenite = "0.26"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

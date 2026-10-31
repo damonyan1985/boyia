@@ -1,6 +1,6 @@
 # Boyia Language
 
-中国人自己开发的 OOP 脚本语言引擎，基于纯 Rust 实现，支持类、继承、异步与 Rust 原生扩展。可作为嵌入式脚本引擎，在 CLI 中已集成 `File`、`Https`、`Zip`、`Json` 等内置能力。
+中国人自己开发的 OOP 脚本语言引擎，基于纯 Rust 实现，支持类、继承、异步与 Rust 原生扩展。可作为嵌入式脚本引擎，在 CLI 中已集成 `File`、`Https`、`Json` 等内置能力；`Zip` 等可选能力可通过 **动态库插件** 加载（见 [插件文档](tools/docs/boyia_plugin.md)）。
 
 Boyia is a Rust-only OOP scripting language engine with custom syntax, class-based OOP, async/await, and native extensions written in Rust.
 
@@ -179,20 +179,25 @@ boyia/
 ├── examples/
 │   ├── boyia_cli/       # ★ 推荐入口：运行脚本 + CLI 内置类
 │   │   ├── .boyia_rc          # 默认入口脚本配置
+│   │   ├── plugins/           # 动态库插件目录（可选）
 │   │   ├── script/main.boyia
 │   │   └── src/builtins/      # utility/（File、OS…）、external/（Config）
+│   ├── boyia_plugin_sdk/ # 内置类 SDK（CLI 与 cdylib 插件共用）
+│   ├── boyia_zip_plugin/ # Zip 示例 cdylib 插件
 │   └── boyia_lsp/       # .boyia 语言的 LSP 服务（可选）
 └── tools/docs/
     ├── boyia_language_development.md   # 语法与扩展开发文档
+    ├── boyia_plugin.md                 # 动态库 Builtin 插件
     └── builtin_struct_fields_mapping.md  # native 对象（#[boyia_native_object]）详解
 ```
 
 ## 用 Rust 扩展 Boyia
 
-- **CLI 内置类**：在 `examples/boyia_cli/src/builtins/` 用 `#[boyia_class]`、`#[boyia_async_builtin]`、`#[boyia_sync_builtin]` 声明；带实例状态时在 struct 上加 `#[boyia_native_object]`（无需 `#[boyia_class(..., native)]`），并加入 `builtins/mod.rs` 的 `DEFAULT_BUILTINS`。
+- **CLI 内置类**：在 `examples/boyia_cli/src/builtins/` 用 `#[boyia_class]`、`#[boyia_async_builtin]`、`#[boyia_sync_builtin]` 声明；带实例状态时在 struct 上加 `#[boyia_native_object]`，并加入 `builtins/mod.rs` 的 `DEFAULT_BUILTINS`。
+- **动态库插件**：独立 `cdylib` + `boyia_plugin_sdk`，运行时放入 `examples/boyia_cli/plugins/` 并设置 `BOYIA_ENABLE_DYLIB_BUILTINS=1`。详见 [Boyia 插件文档](tools/docs/boyia_plugin.md)（示例：`examples/boyia_zip_plugin`）。
 - **通用 native 函数**：参考 `crates/boyia_lib`，在 `init_native_function` 中注册；有返回值时需 `set_native_result` / `set_int_result` 写入 `reg0`。
 - **编译期函数**：`CompileFunction` + `CompileArg` 返回值，在 `init_compile_function` 注册；可用于常量折叠或编译期副作用（如字面量 `require`）。见开发文档 §7.2。
-- **JSON 转换辅助**：`examples/boyia_cli/src/runner/builtin/builtin_json.rs`。
+- **JSON 转换辅助**：`examples/boyia_plugin_sdk/src/runner/builtin_json.rs`（与 CLI 共用 SDK）。
 
 详细步骤、宏约束与异步返回约定见开发文档。
 
@@ -212,11 +217,12 @@ cargo run -p boyia_lsp
 ## 文档
 
 - [Boyia 语言开发文档](tools/docs/boyia_language_development.md) — 语法、`class`/`prop`/`async`、CLI 运行方式、`require` 编译/执行两阶段、CompileFunction、Builtins 编写、`Json` 与 `async/await` 示例
+- [Boyia 动态库 Builtin 插件](tools/docs/boyia_plugin.md) — cdylib 插件、环境变量、Zip 示例与测试
 - [Builtin Native 对象映射](tools/docs/builtin_struct_fields_mapping.md) — `#[boyia_native_object]`、`nativePtr` 与带实例状态的 builtin 类
 
 ## Features
 
 1. 支持 Rust 原生扩展：Builtins 类、Native 函数与编译期 CompileFunction 均可接入。
 2. 支持面向对象：`class`、继承、`prop` 属性与方法。
-3. 支持异步：`async/await` + 线程池异步 Builtins（File / Https / Zip / Json 等）。
+3. 支持异步：`async/await` + 线程池异步 Builtins（File / Https / Json 等；Zip 见插件文档）。
 4. 多文件模块：`require` 编译期依赖图（后序 DFS）+ 编译/执行分离。

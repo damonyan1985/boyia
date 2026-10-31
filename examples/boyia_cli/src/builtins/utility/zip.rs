@@ -2,8 +2,8 @@
 
 #![allow(dead_code)]
 
-use crate::runner::builtin_async::AsyncBuiltinResult;
-use builtin_macro::boyia_class;
+use boyia_plugin_sdk::AsyncBuiltinResult;
+use boyia_builtin_macro::boyia_class;
 use std::fs::{self, File};
 use std::io::copy;
 use std::path::{Path, PathBuf};
@@ -30,6 +30,16 @@ fn run_compress(src: PathBuf, dest_zip: PathBuf, password: String) -> AsyncBuilt
             };
         }
     };
+
+    if let Some(parent) = dest_zip.parent() {
+        if !parent.as_os_str().is_empty() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                return AsyncBuiltinResult::Fail {
+                    message: format!("Zip.compress error: mkdir {} ({e})", parent.display()),
+                };
+            }
+        }
+    }
 
     let dest_file = match File::create(&dest_zip) {
         Ok(f) => f,

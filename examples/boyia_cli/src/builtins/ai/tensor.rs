@@ -4,8 +4,8 @@
 
 #![allow(dead_code)]
 
-use builtin_macro::boyia_class;
-use crate::runner::builtin_vec::NestedVec;
+use boyia_builtin_macro::boyia_class;
+use boyia_plugin_sdk::NestedVec;
 use rand::Rng;
 use std::sync::{Mutex, OnceLock};
 

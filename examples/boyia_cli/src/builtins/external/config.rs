@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use builtin_macro::{boyia_class, boyia_native_object};
+use boyia_builtin_macro::{boyia_class, boyia_native_object};
 
 #[boyia_native_object]
 pub struct ConfigBuiltins {

@@ -2,8 +2,8 @@
 //! Business modules (`file` / `https` / `zip`) use [CallSite], [BuiltinCtx], [ScriptCallback] only.
 
 use boyia_builtins::gen_builtin_class_function;
+use crate::embedder::BuiltinCtx;
 use crate::runner::builtin_json::json_to_boyia_value;
-use crate::runner::builtin_ctx::BuiltinCtx;
 use boyia_runtime::BoyiaRuntime;
 use boyia_vm::{
     copy_object, create_global_class, create_native_string, create_string_object, gen_identifier_from_str,
@@ -20,23 +20,18 @@ impl BuiltinCtx {
         W: FnOnce() -> AsyncBuiltinResult + Send + 'static,
         H: FnOnce(&AsyncBuiltinResult) + Send + 'static,
     {
-        let Some(thread_pool) = self.thread_pool.upgrade() else {
-            return false;
-        };
-        let runtime_handle = self.runtime_handle.clone();
         let cb = callback.0;
-        thread_pool
-            .post_task(move || {
-                let body = work();
-                let _ = runtime_handle.post_task(move |runtime| {
-                    before_callback(&body);
-                    unsafe {
-                        callback_async_result(body, cb, runtime.as_mut());
-                    }
-                    runtime.consume_micro_task();
-                });
-            })
-            .is_ok()
+        let host_for_runtime = self.host.clone();
+        self.host.post_worker(Box::new(move || {
+            let body = work();
+            let _ = host_for_runtime.post_runtime(Box::new(move |runtime| {
+                before_callback(&body);
+                unsafe {
+                    callback_async_result(body, cb, runtime);
+                }
+                runtime.consume_micro_task();
+            }));
+        }))
     }
 }
 
@@ -211,25 +206,6 @@ pub fn register_async_builtin_class<F, R>(
         let class_body = (*class_ref).mValue.mObj.mPtr as *mut BoyiaFunction;
         register(class_body, vm, gen_id);
     }
-}
-
-#[macro_export]
-macro_rules! define_async_native {
-    ($native:ident, $min:expr, $handler:ident) => {
-        unsafe fn $native(vm: &mut boyia_vm::BoyiaVM) -> boyia_vm::OpHandleResult {
-            $crate::runner::builtin_async::async_dispatch(vm, $min, $handler)
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! some_or_end {
-    ($e:expr) => {
-        match $e {
-            Some(value) => value,
-            None => return boyia_vm::OpHandleResult::kOpResultEnd,
-        }
-    };
 }
 
 #[derive(Clone, Copy)]

@@ -1,0 +1,26 @@
+// ZipPlugin dylib smoke test — requires BOYIA_ENABLE_DYLIB_BUILTINS=1 and plugins/boyia_zip_plugin.dll.
+// Static `Zip` stays in DEFAULT_BUILTINS; plugin registers global class ZipPlugin.
+
+class ZipPluginSmoke {
+    prop fun run() {
+        BY_Log("ZipPlugin test begin");
+        ZipPlugin.compress("test/assets/zip_fixture", "test/out/plugin_smoke.zip", "", fun(result) {
+            if (result.get("status") != "ok") {
+                BY_Log("compress fail: " + result.get("message"));
+                return;
+            }
+            BY_Log("compress ok");
+            ZipPlugin.extract("test/out/plugin_smoke.zip", "test/out/plugin_smoke_out", "", fun(result2) {
+                if (result2.get("status") != "ok") {
+                    BY_Log("extract fail: " + result2.get("message"));
+                    return;
+                }
+                BY_Log("extract ok");
+                BY_Log("ZipPlugin test done");
+            });
+        });
+    }
+};
+
+var t = new(ZipPluginSmoke);
+t.run();

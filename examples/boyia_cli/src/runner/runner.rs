@@ -2,12 +2,15 @@
 
 #![allow(dead_code)]
 
-use super::builtin_ctx::{BuiltinCtx, CliEmbedder};
+use super::cli_async_host::CliBuiltinAsyncHost;
+use super::plugin_loader::PluginRegistry;
 use super::run_loop::RunLoopError;
 use super::task_thread::TaskThread;
 use super::thread_pool::ThreadPool;
 use super::BuiltinRegistrar;
-use boyia_runtime::BoyiaRuntime;
+use boyia_plugin_sdk::{set_host_ctx_getter, BuiltinCtx, SdkEmbedder};
+use boyia_runtime::{boyia_runtime_from_vm, BoyiaRuntime};
+use boyia_vm::BoyiaVM;
 use std::sync::{mpsc, Arc};
 
 const DEFAULT_HTTPS_THREAD_COUNT: usize = 4;
@@ -16,17 +19,39 @@ pub struct BoyiaRunner {
     boyia_thread: Option<TaskThread<Box<BoyiaRuntime>>>,
     thread_pool: Option<Arc<ThreadPool>>,
     ready: bool,
+    _plugin_registry: Option<PluginRegistry>,
 }
 
 impl BoyiaRunner {
     /// Create a runner and register `builtins` on the Boyia task thread after VM init.
     pub fn create(builtins: &[BuiltinRegistrar]) -> Box<Self> {
-        let builtins: Vec<BuiltinRegistrar> = builtins.to_vec();
-        Self::create_with_thread_pool(builtins, DEFAULT_HTTPS_THREAD_COUNT)
+        Self::create_impl(builtins.to_vec(), None)
+    }
+
+    /// Static builtins plus registrars from loaded dylib plugins.
+    pub fn create_with_plugins(
+        static_builtins: Vec<BuiltinRegistrar>,
+        plugins: PluginRegistry,
+    ) -> Box<Self> {
+        let mut all = static_builtins;
+        all.extend(plugins.registrars().iter().copied());
+        Self::create_impl(all, Some(plugins))
     }
 
     pub fn create_with_thread_pool(
         builtins: Vec<BuiltinRegistrar>,
+        https_thread_count: usize,
+    ) -> Box<Self> {
+        Self::create_impl_with_pool(builtins, None, https_thread_count)
+    }
+
+    fn create_impl(builtins: Vec<BuiltinRegistrar>, plugins: Option<PluginRegistry>) -> Box<Self> {
+        Self::create_impl_with_pool(builtins, plugins, DEFAULT_HTTPS_THREAD_COUNT)
+    }
+
+    fn create_impl_with_pool(
+        builtins: Vec<BuiltinRegistrar>,
+        plugins: Option<PluginRegistry>,
         https_thread_count: usize,
     ) -> Box<Self> {
         let (ready_tx, ready_rx) = mpsc::channel();
@@ -43,18 +68,26 @@ impl BoyiaRunner {
 
         let runner = Self {
             boyia_thread: Some(task_thread),
-            thread_pool: Some(thread_pool),
+            thread_pool: Some(thread_pool.clone()),
             ready,
+            _plugin_registry: plugins,
         };
         let runner_box = Box::new(runner);
 
-        let builtin_ctx = BuiltinCtx::new(
+        let async_host = Arc::new(CliBuiltinAsyncHost::new(
             runner_box.boyia_thread.as_ref().unwrap().handle(),
-            Arc::downgrade(runner_box.thread_pool.as_ref().unwrap()),
-        );
+            Arc::downgrade(&thread_pool),
+        ));
+        let builtin_ctx = BuiltinCtx::new(async_host);
+
+        set_host_ctx_getter(host_ctx_getter);
+
+        if let Some(plugins) = runner_box._plugin_registry.as_ref() {
+            plugins.bind_host_ctx(host_ctx_getter);
+        }
 
         let (init_tx, init_rx) = mpsc::channel();
-        let embedder = CliEmbedder {
+        let embedder = SdkEmbedder {
             builtin_ctx: builtin_ctx.clone(),
         };
         let _ = runner_box.boyia_thread.as_ref().unwrap().post_task(move |runtime| {
@@ -87,8 +120,6 @@ impl BoyiaRunner {
             .post_task(move |runtime| task(runtime.as_mut()))
     }
 
-    /// Compile the entry script directly from its path (reads the file, resolves `require`
-    /// dependencies via post-order DFS). Replaces reading the source and calling `compile`.
     pub fn compile_file(&self, entry_script: &std::path::Path) -> Result<(), RunLoopError> {
         let path = entry_script.to_path_buf();
         let (done_tx, done_rx) = mpsc::channel();
@@ -122,10 +153,6 @@ impl BoyiaRunner {
         Ok(())
     }
 
-    /// Gracefully stop thread-pool workers and the Boyia task thread.
-    ///
-    /// This method is idempotent-ish: repeated calls may return `RunLoopError::Stopped`
-    /// from already-stopped run loops.
     pub fn stop(&mut self) -> Result<(), RunLoopError> {
         let mut stop_err = None;
 
@@ -148,6 +175,14 @@ impl BoyiaRunner {
             return Err(err);
         }
         Ok(())
+    }
+}
+
+fn host_ctx_getter(vm: &mut BoyiaVM) -> Option<BuiltinCtx> {
+    unsafe {
+        boyia_runtime_from_vm(vm)?
+            .embedder::<SdkEmbedder>()
+            .map(|e| e.builtin_ctx.clone())
     }
 }
 

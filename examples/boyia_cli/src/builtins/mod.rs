@@ -1,10 +1,10 @@
-//! CLI-specific builtin classes (File, Https, Zip, Json, Tensor).
+//! CLI-specific builtin classes (File, Https, Json, Tensor).
 
 pub mod ai;
 pub mod external;
 pub mod utility;
 
-use crate::runner::BuiltinRegistrar;
+use boyia_plugin_sdk::BuiltinRegistrar;
 
 pub const DEFAULT_BUILTINS: &[BuiltinRegistrar] = &[
     external::config::builtin_config_class,

@@ -1,0 +1,66 @@
+//! Shared infrastructure for boyia_cli and dylib plugin builtins.
+
+pub mod embedder;
+pub mod host;
+pub mod layout;
+pub mod plugin_export;
+pub mod registrar;
+pub mod runner;
+
+#[cfg(feature = "build-install")]
+pub mod build_install;
+
+pub use embedder::{BuiltinAsyncHost, BuiltinCtx, SdkEmbedder};
+pub use host::set_host_ctx_getter;
+pub use layout::{default_plugin_dirs, ENV_ENABLE, ENV_PLUGIN_DIRS, ENV_STRICT, HOST_PLUGINS_SUBDIR};
+pub use registrar::BuiltinRegistrar;
+
+pub use runner::builtin_async::{
+    attach_method, register_async_builtin_class, AsyncBuiltinResult, CallSite, ScriptCallback,
+};
+pub use runner::builtin_sync::{BoyiaScalar, SyncCallSite};
+pub use runner::builtin_vec::NestedVec;
+
+#[macro_export]
+macro_rules! some_or_end {
+    ($e:expr) => {
+        match $e {
+            Some(value) => value,
+            None => return boyia_vm::OpHandleResult::kOpResultEnd,
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! define_async_native {
+    ($native:ident, $min:expr, $handler:ident) => {
+        unsafe fn $native(vm: &mut boyia_vm::BoyiaVM) -> boyia_vm::OpHandleResult {
+            $crate::runner::builtin_async::async_dispatch(vm, $min, $handler)
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! define_sync_native {
+    ($native:ident, $min:expr, $handler:ident) => {
+        unsafe fn $native(vm: &mut boyia_vm::BoyiaVM) -> boyia_vm::OpHandleResult {
+            $crate::runner::builtin_sync::sync_dispatch(vm, $min, $handler)
+        }
+    };
+}
+
+/// In plugin `build.rs` (with `build-dependencies` feature `build-install`):
+///
+/// ```ignore
+/// fn main() {
+///     boyia_plugin_sdk::boyia_plugin_install_build!();
+/// }
+/// ```
+#[macro_export]
+macro_rules! boyia_plugin_install_build {
+    () => {
+        fn main() {
+            $crate::build_install::install_beside_host_exe();
+        }
+    };
+}

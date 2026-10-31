@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use builtin_macro::boyia_class;
+use boyia_builtin_macro::boyia_class;
 
 struct AppBuiltins;
 
@@ -10,7 +10,7 @@ struct AppBuiltins;
 impl AppBuiltins {
     /// Stop Boyia runner threads (runtime loop + thread pool).
     #[boyia_sync_builtin(method = "exit")]
-    fn app_exit(ctx: crate::runner::builtin_ctx::BuiltinCtx) -> bool {
+    fn app_exit(ctx: boyia_plugin_sdk::BuiltinCtx) -> bool {
         ctx.stop_runner()
     }
 }

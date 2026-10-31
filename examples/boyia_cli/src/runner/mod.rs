@@ -1,27 +1,13 @@
-//! Boyia task thread, thread pool, async builtin infrastructure, and [BoyiaRunner].
+//! Boyia task thread, thread pool, plugin loader, and [BoyiaRunner].
 
-use boyia_vm::{BoyiaVM, LUintPtr};
+pub use boyia_plugin_sdk::BuiltinRegistrar;
 
-/// Register one global builtin class on the VM (called on the Boyia task thread during init).
-pub type BuiltinRegistrar = fn(&mut BoyiaVM, &mut dyn FnMut(&str) -> LUintPtr);
-
-#[path = "builtin/builtin_json.rs"]
-pub(crate) mod builtin_json;
-
-#[path = "builtin/builtin_vec.rs"]
-pub(crate) mod builtin_vec;
-
-#[path = "builtin/builtin_async.rs"]
-pub(crate) mod builtin_async;
-
-#[path = "builtin/builtin_ctx.rs"]
-pub(crate) mod builtin_ctx;
-
-#[path = "builtin/builtin_sync.rs"]
-pub(crate) mod builtin_sync;
+mod cli_async_host;
+mod plugin_loader;
 mod run_loop;
 mod runner;
 mod task_thread;
 mod thread_pool;
 
+pub use plugin_loader::{dylib_builtins_enabled, plugin_dirs_from_env, plugin_strict, PluginRegistry};
 pub use runner::BoyiaRunner;
