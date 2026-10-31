@@ -1,5 +1,6 @@
 // ZipPlugin dylib smoke test — requires BOYIA_ENABLE_DYLIB_BUILTINS=1 and plugins/boyia_zip_plugin.dll.
 // Static `Zip` stays in DEFAULT_BUILTINS; plugin registers global class ZipPlugin.
+// Execute: cargo run -p boyia_cli -- test/zip_plugin.boyia
 
 class ZipPluginSmoke {
     prop fun run() {

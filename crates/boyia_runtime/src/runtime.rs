@@ -34,7 +34,7 @@ pub struct BoyiaRuntime {
     /// GC state (BoyiaRuntime::m_gc). Created in init() after VM; destroyed in Drop before VM drop.
     gc: *mut boyia_gc::BoyiaGc,
     /// Native function table: (name_key, ptr). Terminated by mAddr == null (we use 0 index as sentinel or check length).
-    native_fun_table: Vec<NativeFunction>,
+    runtime_fun_table: Vec<NativeFunction>,
     /// Compile-time function table (e.g. `require`), dispatched while compiling.
     compile_fun_table: Vec<CompileNativeFunction>,
     id_creator: IdCreator,
@@ -56,7 +56,7 @@ impl BoyiaRuntime {
             vm: None,
             memory_pool: ptr::null_mut(),
             gc: ptr::null_mut(),
-            native_fun_table: Vec::with_capacity(K_NATIVE_FUNCTION_CAPACITY),
+            runtime_fun_table: Vec::with_capacity(K_NATIVE_FUNCTION_CAPACITY),
             compile_fun_table: Vec::with_capacity(K_COMPILE_FUNCTION_CAPACITY),
             id_creator: IdCreator::new(),
             compile_info: BoyiaCompileInfo::new(),
@@ -110,7 +110,7 @@ impl BoyiaRuntime {
         let _ = self.id_creator.gen_ident_by_str("MicroTask");
 
         eprintln!("[init] 3 init_native_function");
-        self.init_native_function();
+        self.init_runtime_function();
         self.init_compile_function();
 
         eprintln!("[init] 4 builtin_string_class");
@@ -163,15 +163,15 @@ impl BoyiaRuntime {
         self.gc = unsafe { boyia_gc::create_gc() };
         self.id_creator.gen_ident_by_str("this");
         self.id_creator.gen_ident_by_str("String");
-        self.init_native_function();
+        self.init_runtime_function();
         self.init_compile_function();
     }
 
-    fn init_native_function(&mut self) {
-        self.append_native("new", boyia_lib::create_object as NativePtr);
-        self.append_native("BY_Log", boyia_lib::log_print as NativePtr);
-        self.append_native("require", boyia_lib::require_file as NativePtr);
-        self.append_native_sentinel();
+    fn init_runtime_function(&mut self) {
+        self.append_runtime_native("new", boyia_lib::create_object as NativePtr);
+        self.append_runtime_native("BY_Log", boyia_lib::log_print as NativePtr);
+        self.append_runtime_native("require", boyia_lib::require_file as NativePtr);
+        self.append_runtime_native_sentinel();
     }
 
     /// Register compile-time functions (resolved while compiling, before native dispatch).
@@ -180,18 +180,18 @@ impl BoyiaRuntime {
         self.append_compile_native_sentinel();
     }
 
-    fn append_native(&mut self, name: &str, ptr: NativePtr) {
+    fn append_runtime_native(&mut self, name: &str, ptr: NativePtr) {
         let id = self.id_creator.gen_ident_by_str(name);
-        if self.native_fun_table.len() < self.native_fun_table.capacity() {
-            self.native_fun_table.push(NativeFunction {
+        if self.runtime_fun_table.len() < self.runtime_fun_table.capacity() {
+            self.runtime_fun_table.push(NativeFunction {
                 mNameKey: id,
                 mAddr: ptr,
             });
         }
     }
 
-    fn append_native_sentinel(&mut self) {
-        self.native_fun_table.push(NativeFunction {
+    fn append_runtime_native_sentinel(&mut self) {
+        self.runtime_fun_table.push(NativeFunction {
             mNameKey: 0,
             mAddr: sentinel_native as NativePtr,
         });
@@ -348,7 +348,7 @@ impl Runtime for BoyiaRuntime {
     }
 
     fn find_native_func(&self, key: LUintPtr) -> LInt {
-        for (idx, nf) in self.native_fun_table.iter().enumerate() {
+        for (idx, nf) in self.runtime_fun_table.iter().enumerate() {
             if nf.mNameKey == 0 || nf.mAddr as *const () == sentinel_native as *const () {
                 break;
             }
@@ -360,10 +360,10 @@ impl Runtime for BoyiaRuntime {
     }
 
     fn call_native_function(&mut self, vm: &mut BoyiaVM, idx: LInt) -> LInt {
-        if idx < 0 || idx as usize >= self.native_fun_table.len() {
+        if idx < 0 || idx as usize >= self.runtime_fun_table.len() {
             return OpHandleResult::kOpResultEnd as i32;
         }
-        let nf = &self.native_fun_table[idx as usize];
+        let nf = &self.runtime_fun_table[idx as usize];
         if nf.mAddr as *const () == sentinel_native as *const () {
             return OpHandleResult::kOpResultEnd as i32;
         }
