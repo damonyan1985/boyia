@@ -4,7 +4,7 @@
 
 #![allow(dead_code)]
 
-use boyia_builtin_macro::{boyia_class, boyia_native_object};
+use boyia_plugin_sdk::{boyia_class, boyia_native_object};
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};

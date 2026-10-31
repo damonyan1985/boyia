@@ -11,8 +11,8 @@ CLI 内置类默认静态链接在 `boyia_cli` 中。可选地通过 **cdylib �
 ## 工程结构
 
 ```
-crates/boyia_builtin_macro/     # #[boyia_class] 等过程宏
 examples/boyia_plugin_sdk/      # BuiltinRegistrar、async/sync、SdkEmbedder
+examples/boyia_plugin_sdk/macro/  # crate 名仍为 boyia_builtin_macro
 examples/boyia_zip_plugin/      # 示例 cdylib（Zip）
 examples/boyia_cli/plugins/     # 可选：手动放置 dll（默认改由 SDK 布局，见下）
 ```
@@ -56,7 +56,7 @@ boyia_plugin_sdk = { path = "../boyia_plugin_sdk", features = ["build-install"] 
 
 ## 编写插件
 
-1. 新建 `cdylib` crate，依赖 `boyia_plugin_sdk` 与 `boyia_builtin_macro`。
+1. 新建 `cdylib` crate，依赖 **`boyia_plugin_sdk`**（含 `boyia_class` 等宏再导出）及业务 crate（如 `zip`）；不必再直接依赖 `boyia_vm` / `boyia_gc`，也无需单独写 `boyia_builtin_macro` 依赖。
 2. 用与 CLI 相同的方式编写 `#[boyia_class]` / `#[boyia_async_builtin]` 等（见 [语言开发文档](./boyia_language_development.md) §6）。
 3. 在 `lib.rs` 中注册：
 

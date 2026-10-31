@@ -248,7 +248,7 @@ CLI 侧目录与入口：
 | `builtins/ai/tensor.rs` | `Tensor` 工厂与句柄管理 |
 | `builtins/mod.rs` | `DEFAULT_BUILTINS` 注册表 |
 | `runner/async.rs`、`runner/sync.rs` | 异步 / 同步 native 基础设施 |
-| `crates/boyia_builtin_macro` | 过程宏 `#[boyia_class]` 等 |
+| `examples/boyia_plugin_sdk/macro` | 过程宏 crate `boyia_builtin_macro`（`#[boyia_class]` 等） |
 | `examples/boyia_plugin_sdk/src/runner/builtin_json.rs` | Boyia 值 ↔ `serde_json::Value` |
 | `examples/boyia_plugin_sdk/src/runner/builtin_vec.rs` | Boyia Array ↔ `Vec<usize>` / 嵌套 `NestedVec` |
 
@@ -283,7 +283,7 @@ CLI 启动流程：`BoyiaRunner::compile_file` 编译入口及 `require` 依赖�
 
 ```rust
 use crate::runner::r#async::AsyncBuiltinResult;
-use boyia_builtin_macro::boyia_class;
+use boyia_plugin_sdk::boyia_class;
 use serde_json::Value as JsonValue;
 
 struct FileBuiltins;
@@ -517,7 +517,7 @@ Rust 侧 `.map(store_tensor)` 是标准库 **`Option::map`**：仅当 `BoyiaTens
 典型写法（源码见 `builtins/external/config.rs`）：
 
 ```rust
-use boyia_builtin_macro::{boyia_class, boyia_native_object};
+use boyia_plugin_sdk::{boyia_class, boyia_native_object};
 
 #[boyia_native_object]
 pub struct ConfigBuiltins {

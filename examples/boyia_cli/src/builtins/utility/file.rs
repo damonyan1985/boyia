@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 
 use boyia_plugin_sdk::AsyncBuiltinResult;
-use boyia_builtin_macro::boyia_class;
+use boyia_plugin_sdk::boyia_class;
 use std::fs::{self, File};
 use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};

@@ -4,7 +4,7 @@
 
 #![allow(dead_code)]
 
-use boyia_builtin_macro::boyia_class;
+use boyia_plugin_sdk::boyia_class;
 use boyia_plugin_sdk::NestedVec;
 use rand::Rng;
 use std::sync::{Mutex, OnceLock};

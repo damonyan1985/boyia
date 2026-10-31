@@ -13,7 +13,9 @@ host-exe-plugins = []
 build-install = []
 
 [dependencies]
+boyia_builtin_macro = { path = "./macro" }
 boyia_builtins = { path = "../../crates/boyia_builtins" }
+boyia_gc = { path = "../../crates/boyia_gc" }
 boyia_runtime = { path = "../../crates/boyia_runtime" }
 boyia_vm = { path = "../../crates/boyia_vm" }
 serde_json = "1.0.149"

@@ -8,7 +8,7 @@ members = [
     "crates/boyia_builtins",
     "crates/boyia_lib",
     "crates/boyia_runtime",
-    "crates/boyia_builtin_macro",
+    "examples/boyia_plugin_sdk/macro",
     "examples/boyia_cli",
     "examples/boyia_lsp",
     "examples/boyia_plugin_sdk",

@@ -12,7 +12,6 @@ path = "src/main.rs"
 boyia_builtins = { path = "../../crates/boyia_builtins" }
 boyia_gc = { path = "../../crates/boyia_gc" }
 boyia_plugin_sdk = { path = "../boyia_plugin_sdk" }
-boyia_builtin_macro = { path = "../../crates/boyia_builtin_macro" }
 boyia_runtime = { path = "../../crates/boyia_runtime" }
 boyia_vm = { path = "../../crates/boyia_vm" }
 libloading = "0.8"

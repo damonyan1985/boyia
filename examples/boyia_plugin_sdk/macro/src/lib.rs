@@ -667,7 +667,7 @@ fn sync_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> {
             let #name = {
                 let raw = ::boyia_plugin_sdk::some_or_end!({
                     let val = unsafe {
-                        boyia_vm::get_local_value(#index, site.vm()) as *const boyia_vm::BoyiaValue
+                        ::boyia_plugin_sdk::boyia_vm::get_local_value(#index, site.vm()) as *const ::boyia_plugin_sdk::boyia_vm::BoyiaValue
                     };
                     if val.is_null() { None } else { Some(val) }
                 });
@@ -683,7 +683,7 @@ fn sync_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> {
             let #name = {
                 let raw = ::boyia_plugin_sdk::some_or_end!({
                     let val = unsafe {
-                        boyia_vm::get_local_value(#index, site.vm()) as *const boyia_vm::BoyiaValue
+                        ::boyia_plugin_sdk::boyia_vm::get_local_value(#index, site.vm()) as *const ::boyia_plugin_sdk::boyia_vm::BoyiaValue
                     };
                     if val.is_null() { None } else { Some(val) }
                 });
@@ -699,7 +699,7 @@ fn sync_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> {
             let #name = {
                 let raw = ::boyia_plugin_sdk::some_or_end!({
                     let val = unsafe {
-                        boyia_vm::get_local_value(#index, site.vm()) as *const boyia_vm::BoyiaValue
+                        ::boyia_plugin_sdk::boyia_vm::get_local_value(#index, site.vm()) as *const ::boyia_plugin_sdk::boyia_vm::BoyiaValue
                     };
                     if val.is_null() { None } else { Some(val) }
                 });
@@ -859,7 +859,7 @@ fn expand_async_method(
             )
         }
 
-        fn #handler_name(site: &mut ::boyia_plugin_sdk::runner::builtin_async::CallSite<'_>) -> boyia_vm::OpHandleResult {
+        fn #handler_name(site: &mut ::boyia_plugin_sdk::runner::builtin_async::CallSite<'_>) -> ::boyia_plugin_sdk::boyia_vm::OpHandleResult {
             #( #arg_extractions )*
             let callback = ::boyia_plugin_sdk::some_or_end!(site.callback());
             site.finish(#schedule_name(site.ctx(), #( #arg_names, )* callback))
@@ -947,19 +947,19 @@ fn expand_sync_method(
     let (state_prelude, state_epilogue) = if self_arg != SelfArg::None {
         let access = match self_arg {
             SelfArg::Ref => quote! {
-                boyia_gc::boyia_native_ref::<#struct_ty>(class_body, &mut *rt)
+                ::boyia_plugin_sdk::boyia_gc::boyia_native_ref::<#struct_ty>(class_body, &mut *rt)
             },
             SelfArg::Mut => quote! {
-                boyia_gc::boyia_native_mut::<#struct_ty>(class_body, &mut *rt)
+                ::boyia_plugin_sdk::boyia_gc::boyia_native_mut::<#struct_ty>(class_body, &mut *rt)
             },
             SelfArg::None => unreachable!(),
         };
         (
             quote! {
                 let class_body = ::boyia_plugin_sdk::some_or_end!(site.this_function());
-                let rt = unsafe { boyia_vm::get_runtime_from_vm(site.vm()) };
+                let rt = unsafe { ::boyia_plugin_sdk::boyia_vm::get_runtime_from_vm(site.vm()) };
                 if rt.is_null() {
-                    return boyia_vm::OpHandleResult::kOpResultEnd;
+                    return ::boyia_plugin_sdk::boyia_vm::OpHandleResult::kOpResultEnd;
                 }
                 let state = unsafe { #access };
             },
@@ -1017,7 +1017,7 @@ fn expand_sync_method(
             #state_epilogue
             match __sync_result {
                 Some(v) => ::boyia_plugin_sdk::runner::builtin_vec::set_sync_vec_usize_return(v, site.vm()),
-                None => boyia_vm::OpHandleResult::kOpResultEnd,
+                None => ::boyia_plugin_sdk::boyia_vm::OpHandleResult::kOpResultEnd,
             }
         }
     } else if is_vec_boyia_scalar(&return_ty) {
@@ -1032,7 +1032,7 @@ fn expand_sync_method(
             #state_epilogue
             match __sync_result {
                 Some(j) => ::boyia_plugin_sdk::runner::builtin_json::set_sync_json_return(j, site.vm()),
-                None => boyia_vm::OpHandleResult::kOpResultEnd,
+                None => ::boyia_plugin_sdk::boyia_vm::OpHandleResult::kOpResultEnd,
             }
         }
     } else {
@@ -1044,7 +1044,7 @@ fn expand_sync_method(
     };
 
     Ok(quote! {
-        fn #handler_name(site: &mut ::boyia_plugin_sdk::runner::builtin_sync::SyncCallSite<'_>) -> boyia_vm::OpHandleResult {
+        fn #handler_name(site: &mut ::boyia_plugin_sdk::runner::builtin_sync::SyncCallSite<'_>) -> ::boyia_plugin_sdk::boyia_vm::OpHandleResult {
             #state_prelude
             #persistent_bind
             #( #arg_extractions )*
@@ -1136,11 +1136,11 @@ fn expand_class(class_config: &ClassConfig, imp: &ItemImpl) -> syn::Result<proc_
 
     let attach_props = if needs_native_object {
         quote! {
-            fn __boyia_attach_native_ptr<T: boyia_gc::NativePropTrait>(
-                class_body: *mut boyia_vm::BoyiaFunction,
-                gen_id: &mut dyn FnMut(&str) -> boyia_vm::LUintPtr,
+            fn __boyia_attach_native_ptr<T: ::boyia_plugin_sdk::boyia_gc::NativePropTrait>(
+                class_body: *mut ::boyia_plugin_sdk::boyia_vm::BoyiaFunction,
+                gen_id: &mut dyn FnMut(&str) -> ::boyia_plugin_sdk::boyia_vm::LUintPtr,
             ) {
-                unsafe { boyia_gc::attach_native_ptr_slot(class_body, gen_id); }
+                unsafe { ::boyia_plugin_sdk::boyia_gc::attach_native_ptr_slot(class_body, gen_id); }
             }
             __boyia_attach_native_ptr::<#struct_ty>(class_body, gen_id);
         }
@@ -1151,7 +1151,7 @@ fn expand_class(class_config: &ClassConfig, imp: &ItemImpl) -> syn::Result<proc_
     let native_object_assert = if needs_native_object {
         quote! {
             const _: () = {
-                fn __boyia_assert_native_prop<T: boyia_gc::NativePropTrait>() {}
+                fn __boyia_assert_native_prop<T: ::boyia_plugin_sdk::boyia_gc::NativePropTrait>() {}
                 fn __boyia_check_native_prop() {
                     __boyia_assert_native_prop::<#struct_ty>();
                 }
@@ -1171,8 +1171,8 @@ fn expand_class(class_config: &ClassConfig, imp: &ItemImpl) -> syn::Result<proc_
         #( #method_expansions )*
 
         pub fn #registrar(
-            vm: &mut boyia_vm::BoyiaVM,
-            gen_id: &mut dyn FnMut(&str) -> boyia_vm::LUintPtr,
+            vm: &mut ::boyia_plugin_sdk::boyia_vm::BoyiaVM,
+            gen_id: &mut dyn FnMut(&str) -> ::boyia_plugin_sdk::boyia_vm::LUintPtr,
         ) {
             ::boyia_plugin_sdk::runner::builtin_async::register_async_builtin_class(vm, gen_id, #class_name, |class_body, vm, gen_id| {
                 #attach_props
@@ -1348,7 +1348,7 @@ fn expand_boyia_native_object(
     }
 
     let hdr_field: Field = syn::parse_quote! {
-        __boyia_hdr: boyia_gc::NativePropHeader
+        __boyia_hdr: ::boyia_plugin_sdk::boyia_gc::NativePropHeader
     };
     if let Fields::Named(ref mut named) = struct_item.fields {
         named.named.insert(0, hdr_field);
@@ -1413,7 +1413,7 @@ fn expand_boyia_native_object(
                     if vm_ptr.is_null() {
                         return;
                     }
-                    let Some(vm) = (unsafe { boyia_vm::vm_from_void(vm_ptr) }) else {
+                    let Some(vm) = (unsafe { ::boyia_plugin_sdk::boyia_vm::vm_from_void(vm_ptr) }) else {
                         return;
                     };
                     ::boyia_plugin_sdk::runner::builtin_async::release_script_callback(vm, callback);
@@ -1435,14 +1435,14 @@ fn expand_boyia_native_object(
                 build_args: F,
             ) -> bool
             where
-                F: FnOnce(&mut boyia_vm::BoyiaVM) -> Option<Vec<boyia_vm::BoyiaValue>> + Send + 'static,
+                F: FnOnce(&mut ::boyia_plugin_sdk::boyia_vm::BoyiaVM) -> Option<Vec<::boyia_plugin_sdk::boyia_vm::BoyiaValue>> + Send + 'static,
             {
                 ctx.post_runtime_task(move |runtime| {
                     let vm_ptr = runtime.vm();
                     if vm_ptr.is_null() {
                         return;
                     }
-                    let Some(vm) = (unsafe { boyia_vm::vm_from_void(vm_ptr) }) else {
+                    let Some(vm) = (unsafe { ::boyia_plugin_sdk::boyia_vm::vm_from_void(vm_ptr) }) else {
                         return;
                     };
                     let Some(mut args) = build_args(vm) else {
@@ -1462,14 +1462,14 @@ fn expand_boyia_native_object(
         #struct_item
 
         impl #struct_name #generics {
-            fn boyia_new_header() -> boyia_gc::NativePropHeader {
-                boyia_gc::NativePropHeader::new(&<Self as boyia_gc::NativePropTrait>::VTABLE)
+            fn boyia_new_header() -> ::boyia_plugin_sdk::boyia_gc::NativePropHeader {
+                ::boyia_plugin_sdk::boyia_gc::NativePropHeader::new(&<Self as ::boyia_plugin_sdk::boyia_gc::NativePropTrait>::VTABLE)
             }
             #( #persistent_helpers )*
         }
 
-        impl boyia_gc::NativePropTrait for #struct_name #generics {
-            const VTABLE: boyia_gc::NativePropVTable = boyia_gc::NativePropVTable {
+        impl ::boyia_plugin_sdk::boyia_gc::NativePropTrait for #struct_name #generics {
+            const VTABLE: ::boyia_plugin_sdk::boyia_gc::NativePropVTable = ::boyia_plugin_sdk::boyia_gc::NativePropVTable {
                 mark_fn: Self::native_mark,
                 flag_fn: Self::native_flag,
                 drop_fn: Self::native_drop,
@@ -1482,7 +1482,7 @@ fn expand_boyia_native_object(
                 }
             }
 
-            unsafe fn native_drop(ptr: *mut boyia_vm::LVoid) {
+            unsafe fn native_drop(ptr: *mut ::boyia_plugin_sdk::boyia_vm::LVoid) {
                 let _ = Box::from_raw(ptr as *mut Self);
             }
         }

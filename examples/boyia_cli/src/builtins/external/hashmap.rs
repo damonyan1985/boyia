@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use boyia_builtin_macro::{boyia_class, boyia_native_object};
+use boyia_plugin_sdk::{boyia_class, boyia_native_object};
 use boyia_plugin_sdk::BoyiaScalar;
 use std::collections::HashMap as StdHashMap;
 

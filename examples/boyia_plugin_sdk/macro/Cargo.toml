@@ -2,7 +2,7 @@
 name = "boyia_builtin_macro"
 version = "0.1.0"
 edition = "2021"
-description = "Proc macros for Boyia CLI and plugin builtins"
+description = "Proc macros for Boyia builtins (#[boyia_class], etc.); lives under boyia_plugin_sdk/"
 
 [lib]
 proc-macro = true
