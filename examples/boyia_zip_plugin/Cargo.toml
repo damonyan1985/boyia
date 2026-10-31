@@ -3,7 +3,7 @@ name = "boyia_zip_plugin"
 version = "0.1.0"
 edition = "2021"
 description = "Boyia Zip builtin as a dylib plugin"
-build = "build.rs"
+build = "../boyia_plugin_sdk/build/plugin_install.rs"
 
 [lib]
 crate-type = ["cdylib"]

@@ -49,13 +49,14 @@ macro_rules! define_sync_native {
     };
 }
 
-/// In plugin `build.rs` (with `build-dependencies` feature `build-install`):
+/// Optional: own `build.rs` that only invokes the install hook (prefer SDK shared script instead).
 ///
 /// ```ignore
-/// fn main() {
-///     boyia_plugin_sdk::boyia_plugin_install_build!();
-/// }
+/// boyia_plugin_sdk::boyia_plugin_install_build!();
 /// ```
+///
+/// Recommended: no local `build.rs` — in plugin `Cargo.toml` set
+/// `build = "../boyia_plugin_sdk/build/plugin_install.rs"` and `[build-dependencies]` with feature `build-install`.
 #[macro_export]
 macro_rules! boyia_plugin_install_build {
     () => {

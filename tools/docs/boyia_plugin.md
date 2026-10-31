@@ -22,21 +22,18 @@ examples/boyia_cli/plugins/     # 可选：手动放置 dll（默认改由 SDK �
 | Feature | 用途 |
 |---------|------|
 | `host-exe-plugins`（**default**） | Host 默认从 `{boyia_cli.exe}/plugins` 加载；关闭后回退为 cwd 下 `plugins/` |
-| `build-install` | 供插件 `[build-dependencies]` 使用，配合 `boyia_plugin_install_build!` 将 cdylib 复制到 `target/{profile}/plugins/` |
+| `build-install` | 插件 `[build-dependencies]` + 指向 SDK 共享 build 脚本（见下），将 cdylib 安装到 `target/{profile}/plugins/` |
 
-插件 `Cargo.toml` 示例：
+插件 `Cargo.toml`（**无需** 自建 `build.rs`）：
 
 ```toml
-build = "build.rs"
+build = "../boyia_plugin_sdk/build/plugin_install.rs"
 
 [build-dependencies]
 boyia_plugin_sdk = { path = "../boyia_plugin_sdk", features = ["build-install"] }
 ```
 
-```rust
-// build.rs
-boyia_plugin_sdk::boyia_plugin_install_build!();
-```
+若 build 脚本还需其它逻辑，可自建 `build.rs` 并调用 `boyia_plugin_sdk::boyia_plugin_install_build!();`。
 
 ## 导出符号（插件侧）
 

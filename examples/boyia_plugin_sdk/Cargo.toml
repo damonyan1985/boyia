@@ -9,6 +9,7 @@ default = ["host-exe-plugins"]
 # Host loads plugins from {current_exe}/plugins (see layout::default_plugin_dirs).
 host-exe-plugins = []
 # Plugin build.rs: copy cdylib to target/{profile}/plugins/ after link.
+# Plugin Cargo.toml: build = "../boyia_plugin_sdk/build/plugin_install.rs"
 build-install = []
 
 [dependencies]
