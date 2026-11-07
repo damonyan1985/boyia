@@ -34,7 +34,7 @@ macro_rules! some_or_end {
     ($e:expr) => {
         match $e {
             Some(value) => value,
-            None => return boyia_vm::OpHandleResult::kOpResultEnd,
+            None => return $crate::boyia_vm::OpHandleResult::kOpResultEnd,
         }
     };
 }
@@ -42,7 +42,7 @@ macro_rules! some_or_end {
 #[macro_export]
 macro_rules! define_async_native {
     ($native:ident, $min:expr, $handler:ident) => {
-        unsafe fn $native(vm: &mut boyia_vm::BoyiaVM) -> boyia_vm::OpHandleResult {
+        unsafe fn $native(vm: &mut $crate::boyia_vm::BoyiaVM) -> $crate::boyia_vm::OpHandleResult {
             $crate::runner::builtin_async::async_dispatch(vm, $min, $handler)
         }
     };
@@ -51,7 +51,7 @@ macro_rules! define_async_native {
 #[macro_export]
 macro_rules! define_sync_native {
     ($native:ident, $min:expr, $handler:ident) => {
-        unsafe fn $native(vm: &mut boyia_vm::BoyiaVM) -> boyia_vm::OpHandleResult {
+        unsafe fn $native(vm: &mut $crate::boyia_vm::BoyiaVM) -> $crate::boyia_vm::OpHandleResult {
             $crate::runner::builtin_sync::sync_dispatch(vm, $min, $handler)
         }
     };
