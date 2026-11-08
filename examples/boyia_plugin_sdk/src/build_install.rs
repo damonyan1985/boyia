@@ -8,7 +8,7 @@ pub fn install_beside_host_exe() {
     let profile = std::env::var("PROFILE").expect("PROFILE");
     let pkg = std::env::var("CARGO_PKG_NAME").expect("CARGO_PKG_NAME");
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
-    let workspace = manifest.join("../..");
+    let workspace = workspace_root(&manifest);
     let target_dir = std::env::var("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| workspace.join("target"));
@@ -43,6 +43,25 @@ pub fn install_beside_host_exe() {
     {
         println!("cargo:rustc-link-arg=-o");
         println!("cargo:rustc-link-arg={out}");
+    }
+}
+
+/// Walk up from the plugin manifest until a `Cargo.toml` containing `[workspace]` is found,
+/// so plugins can live at any depth under `examples/`.
+fn workspace_root(manifest: &PathBuf) -> PathBuf {
+    let mut dir = manifest.clone();
+    loop {
+        let cargo = dir.join("Cargo.toml");
+        if cargo.is_file() {
+            if let Ok(text) = std::fs::read_to_string(&cargo) {
+                if text.lines().any(|line| line.trim() == "[workspace]") {
+                    return dir;
+                }
+            }
+        }
+        if !dir.pop() {
+            return manifest.clone();
+        }
     }
 }
 

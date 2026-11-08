@@ -358,7 +358,7 @@ pub const DEFAULT_BUILTINS: &[BuiltinRegistrar] = &[
 ];
 ```
 
-`Zip` 已改为可选动态库插件（`examples/boyia_zip_plugin`），见 [boyia_plugin.md](./boyia_plugin.md)。
+`Zip` 已改为可选动态库插件（`examples/boyia_plugins/boyia_zip_plugin`），见 [boyia_plugin.md](./boyia_plugin.md)。
 
 `BoyiaRunner::create(registrars)` 会在 Boyia 任务线程上依次调用这些 `registrar`；启用插件时还会追加 dylib 导出的 registrar。
 

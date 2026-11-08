@@ -3,15 +3,15 @@ name = "boyia_zip_plugin"
 version = "0.1.0"
 edition = "2021"
 description = "Boyia Zip builtin as a dylib plugin"
-build = "../boyia_plugin_sdk/build/plugin_install.rs"
+build = "../../boyia_plugin_sdk/build/plugin_install.rs"
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-boyia_plugin_sdk = { path = "../boyia_plugin_sdk" }
+boyia_plugin_sdk = { path = "../../boyia_plugin_sdk" }
 walkdir = "2.5"
 zip = { version = "2", default-features = false, features = ["deflate", "aes-crypto"] }
 
 [build-dependencies]
-boyia_plugin_sdk = { path = "../boyia_plugin_sdk", features = ["build-install"] }
+boyia_plugin_sdk = { path = "../../boyia_plugin_sdk", features = ["build-install"] }

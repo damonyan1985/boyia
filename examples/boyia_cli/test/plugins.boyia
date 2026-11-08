@@ -1,0 +1,35 @@
+// Combined dylib plugin smoke test: PathPlugin (sync) + ZipPlugin (async).
+// Requires BOYIA_ENABLE_DYLIB_BUILTINS=1 and target/{profile}/plugins/*.dll.
+// Execute: cargo run -p boyia_cli -- test/plugins.boyia
+
+class PluginSmoke {
+    prop fun run() {
+        BY_Log("Plugin smoke begin");
+
+        // PathPlugin.join: lexical join with `.` / `..` normalization.
+        BY_Log("path join rel:    " + PathPlugin.join("a/b", "c.txt"));
+        BY_Log("path join dotdot: " + PathPlugin.join("a/b", "../c/./d.txt"));
+        BY_Log("path join empty:  " + PathPlugin.join("a/b", ""));
+        BY_Log("path join no base:" + PathPlugin.join("", "x/y"));
+
+        // ZipPlugin: compress fixture then extract it back.
+        ZipPlugin.compress("test/assets/zip_fixture", "test/out/plugin_smoke_all.zip", "", fun(result) {
+            if (result.get("status") != "ok") {
+                BY_Log("zip compress fail: " + result.get("message"));
+                return;
+            }
+            BY_Log("zip compress ok");
+            ZipPlugin.extract("test/out/plugin_smoke_all.zip", "test/out/plugin_smoke_all_out", "", fun(result2) {
+                if (result2.get("status") != "ok") {
+                    BY_Log("zip extract fail: " + result2.get("message"));
+                    return;
+                }
+                BY_Log("zip extract ok");
+                BY_Log("Plugin smoke done");
+            });
+        });
+    }
+};
+
+var t = new(PluginSmoke);
+t.run();

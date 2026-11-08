@@ -183,7 +183,9 @@ boyia/
 │   │   ├── script/main.boyia
 │   │   └── src/builtins/      # utility/（File、OS…）、external/（Config）
 │   ├── boyia_plugin_sdk/ # 内置类 SDK（CLI 与 cdylib 插件共用）
-│   ├── boyia_zip_plugin/ # Zip 示例 cdylib 插件
+│   ├── boyia_plugins/    # cdylib 插件集合
+│   │   ├── boyia_zip_plugin/  # Zip 示例插件
+│   │   └── boyia_path_plugin/ # Path 示例插件
 │   └── boyia_lsp/       # .boyia 语言的 LSP 服务（可选）
 └── tools/docs/
     ├── boyia_language_development.md   # 语法与扩展开发文档
@@ -194,7 +196,7 @@ boyia/
 ## 用 Rust 扩展 Boyia
 
 - **CLI 内置类**：在 `examples/boyia_cli/src/builtins/` 用 `#[boyia_class]`、`#[boyia_async_builtin]`、`#[boyia_sync_builtin]` 声明；带实例状态时在 struct 上加 `#[boyia_native_object]`，并加入 `builtins/mod.rs` 的 `DEFAULT_BUILTINS`。
-- **动态库插件**：独立 `cdylib` + `boyia_plugin_sdk`，运行时放入 `examples/boyia_cli/plugins/` 并设置 `BOYIA_ENABLE_DYLIB_BUILTINS=1`。详见 [Boyia 插件文档](tools/docs/boyia_plugin.md)（示例：`examples/boyia_zip_plugin`）。
+- **动态库插件**：独立 `cdylib` + `boyia_plugin_sdk`，运行时放入 `examples/boyia_cli/plugins/` 并设置 `BOYIA_ENABLE_DYLIB_BUILTINS=1`。详见 [Boyia 插件文档](tools/docs/boyia_plugin.md)（示例：`examples/boyia_plugins/boyia_zip_plugin`）。
 - **通用 native 函数**：参考 `crates/boyia_lib`，在 `init_native_function` 中注册；有返回值时需 `set_native_result` / `set_int_result` 写入 `reg0`。
 - **编译期函数**：`CompileFunction` + `CompileArg` 返回值，在 `init_compile_function` 注册；可用于常量折叠或编译期副作用（如字面量 `require`）。见开发文档 §7.2。
 - **JSON 转换辅助**：`examples/boyia_plugin_sdk/src/runner/builtin_json.rs`（与 CLI 共用 SDK）。

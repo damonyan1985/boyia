@@ -1,0 +1,20 @@
+// PathPlugin dylib smoke test — requires BOYIA_ENABLE_DYLIB_BUILTINS=1 and plugins/boyia_path_plugin.dll.
+// Plugin registers global class PathPlugin; `join` is a sync method.
+// Execute: cargo run -p boyia_cli -- test/path_plugin.boyia
+
+class PathPluginSmoke {
+    prop fun run() {
+        BY_Log("PathPlugin test begin");
+
+        BY_Log("join rel:    " + PathPlugin.join("a/b", "c.txt"));
+        BY_Log("join dotdot: " + PathPlugin.join("a/b", "../c/./d.txt"));
+        BY_Log("join empty:  " + PathPlugin.join("a/b", ""));
+        BY_Log("join no base:" + PathPlugin.join("", "x/y"));
+        BY_Log("join nested: " + PathPlugin.join("a", "b/c/../d"));
+
+        BY_Log("PathPlugin test done");
+    }
+};
+
+var t = new(PathPluginSmoke);
+t.run();

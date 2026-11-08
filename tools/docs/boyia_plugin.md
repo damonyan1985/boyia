@@ -13,7 +13,9 @@ CLI 内置类默认静态链接在 `boyia_cli` 中。可选地通过 **cdylib �
 ```
 examples/boyia_plugin_sdk/      # BuiltinRegistrar、async/sync、SdkEmbedder
 examples/boyia_plugin_sdk/macro/  # crate 名仍为 boyia_builtin_macro
-examples/boyia_zip_plugin/      # 示例 cdylib（Zip）
+examples/boyia_plugins/         # cdylib 插件集合
+examples/boyia_plugins/boyia_zip_plugin/   # 示例 cdylib（Zip）
+examples/boyia_plugins/boyia_path_plugin/  # 示例 cdylib（Path）
 examples/boyia_cli/plugins/     # 可选：手动放置 dll（默认改由 SDK 布局，见下）
 ```
 
@@ -71,7 +73,7 @@ boyia_plugin_sdk::boyia_plugin_export! {
 
 4. 异步方法依赖 Host 注入：`boyia_cli` 启动时 `set_host_ctx_getter`，并在加载每个 cdylib 后调用导出的 `boyia_plugin_bind_host_ctx`（插件内 `BuiltinCtx::from_vm` 才能跨 DLL 使用线程池）。
 
-参考实现：`examples/boyia_zip_plugin/src/zip_plugin.rs`（与 `examples/boyia_cli/src/builtins/utility/zip.rs` 逻辑相同，供 cdylib 构建）。
+参考实现：`examples/boyia_plugins/boyia_zip_plugin/src/zip_plugin.rs`（与 `examples/boyia_cli/src/builtins/utility/zip.rs` 逻辑相同，供 cdylib 构建）。
 
 ## 构建与部署
 
