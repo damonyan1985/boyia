@@ -3,11 +3,10 @@
 #![allow(dead_code)]
 
 use super::cli_async_host::CliBuiltinAsyncHost;
-use super::plugin_loader::PluginRegistry;
 use super::run_loop::RunLoopError;
 use super::task_thread::TaskThread;
 use super::thread_pool::ThreadPool;
-use super::BuiltinRegistrar;
+use super::{BuiltinRegistrar, PluginRegistry};
 use boyia_plugin_sdk::{set_host_ctx_getter, BuiltinCtx, SdkEmbedder};
 use boyia_runtime::{boyia_runtime_from_vm, BoyiaRuntime};
 use boyia_vm::BoyiaVM;

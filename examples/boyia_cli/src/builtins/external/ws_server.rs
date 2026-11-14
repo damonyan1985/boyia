@@ -254,10 +254,10 @@ fn emit_on_close(
         listener.callback,
         move |vm| {
             let channel_arg =
-                boyia_plugin_sdk::runner::builtin_sync::push_callback_int(channel_id as i64, vm)?;
-            let peer_arg = boyia_plugin_sdk::runner::builtin_sync::push_callback_int(peer_port as i64, vm)?;
-            let code_arg = boyia_plugin_sdk::runner::builtin_sync::push_callback_int(close_code as i64, vm)?;
-            let reason_arg = boyia_plugin_sdk::runner::builtin_sync::push_callback_string(reason, vm)?;
+                boyia_plugin_sdk::builtin::builtin_sync::push_callback_int(channel_id as i64, vm)?;
+            let peer_arg = boyia_plugin_sdk::builtin::builtin_sync::push_callback_int(peer_port as i64, vm)?;
+            let code_arg = boyia_plugin_sdk::builtin::builtin_sync::push_callback_int(close_code as i64, vm)?;
+            let reason_arg = boyia_plugin_sdk::builtin::builtin_sync::push_callback_string(reason, vm)?;
             Some(vec![channel_arg, peer_arg, code_arg, reason_arg])
         },
     );
@@ -274,9 +274,9 @@ fn emit_on_receive(
         listener.callback,
         move |vm| {
             let channel_arg =
-                boyia_plugin_sdk::runner::builtin_sync::push_callback_int(channel_id as i64, vm)?;
-            let peer_arg = boyia_plugin_sdk::runner::builtin_sync::push_callback_int(peer_port as i64, vm)?;
-            let msg_arg = boyia_plugin_sdk::runner::builtin_sync::push_callback_string(text, vm)?;
+                boyia_plugin_sdk::builtin::builtin_sync::push_callback_int(channel_id as i64, vm)?;
+            let peer_arg = boyia_plugin_sdk::builtin::builtin_sync::push_callback_int(peer_port as i64, vm)?;
+            let msg_arg = boyia_plugin_sdk::builtin::builtin_sync::push_callback_string(text, vm)?;
             Some(vec![channel_arg, peer_arg, msg_arg])
         },
     );

@@ -7,14 +7,21 @@ pub mod host;
 pub mod layout;
 pub mod plugin_export;
 pub mod registrar;
-pub mod runner;
+pub mod builtin;
 
 #[cfg(feature = "build-install")]
 pub mod build_install;
 
+#[cfg(feature = "plugin-loader")]
+pub mod plugin_loader;
+
 pub use embedder::{BuiltinAsyncHost, BuiltinCtx, SdkEmbedder};
 pub use host::set_host_ctx_getter;
 pub use layout::{default_plugin_dirs, ENV_ENABLE, ENV_PLUGIN_DIRS, ENV_STRICT, HOST_PLUGINS_SUBDIR};
+#[cfg(feature = "plugin-loader")]
+pub use plugin_loader::{
+    dylib_builtins_enabled, plugin_dirs_from_env, plugin_strict, PluginLoadError, PluginRegistry,
+};
 pub use registrar::BuiltinRegistrar;
 
 pub use boyia_builtin_macro::{boyia_class, boyia_native_object};
@@ -23,11 +30,11 @@ pub use boyia_builtin_macro::{boyia_class, boyia_native_object};
 pub use boyia_gc;
 pub use boyia_vm;
 
-pub use runner::builtin_async::{
+pub use builtin::builtin_async::{
     attach_method, register_async_builtin_class, AsyncBuiltinResult, CallSite, ScriptCallback,
 };
-pub use runner::builtin_sync::{BoyiaScalar, SyncCallSite};
-pub use runner::builtin_vec::NestedVec;
+pub use builtin::builtin_sync::{BoyiaScalar, SyncCallSite};
+pub use builtin::builtin_vec::NestedVec;
 
 #[macro_export]
 macro_rules! some_or_end {
@@ -43,7 +50,7 @@ macro_rules! some_or_end {
 macro_rules! define_async_native {
     ($native:ident, $min:expr, $handler:ident) => {
         unsafe fn $native(vm: &mut $crate::boyia_vm::BoyiaVM) -> $crate::boyia_vm::OpHandleResult {
-            $crate::runner::builtin_async::async_dispatch(vm, $min, $handler)
+            $crate::builtin::builtin_async::async_dispatch(vm, $min, $handler)
         }
     };
 }
@@ -52,7 +59,7 @@ macro_rules! define_async_native {
 macro_rules! define_sync_native {
     ($native:ident, $min:expr, $handler:ident) => {
         unsafe fn $native(vm: &mut $crate::boyia_vm::BoyiaVM) -> $crate::boyia_vm::OpHandleResult {
-            $crate::runner::builtin_sync::sync_dispatch(vm, $min, $handler)
+            $crate::builtin::builtin_sync::sync_dispatch(vm, $min, $handler)
         }
     };
 }

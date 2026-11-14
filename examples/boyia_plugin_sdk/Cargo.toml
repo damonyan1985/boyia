@@ -11,6 +11,8 @@ host-exe-plugins = []
 # Plugin build.rs: copy cdylib to target/{profile}/plugins/ after link.
 # Plugin Cargo.toml: build = "../boyia_plugin_sdk/build/plugin_install.rs"
 build-install = []
+# Host-side cdylib loader (libloading). Plugins themselves do not need this.
+plugin-loader = ["dep:libloading"]
 
 [dependencies]
 boyia_builtin_macro = { path = "./macro" }
@@ -18,4 +20,5 @@ boyia_builtins = { path = "../../crates/boyia_builtins" }
 boyia_gc = { path = "../../crates/boyia_gc" }
 boyia_runtime = { path = "../../crates/boyia_runtime" }
 boyia_vm = { path = "../../crates/boyia_vm" }
+libloading = { version = "0.8", optional = true }
 serde_json = "1.0.149"

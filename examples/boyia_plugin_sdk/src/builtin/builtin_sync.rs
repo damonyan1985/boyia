@@ -287,13 +287,13 @@ impl<'a> SyncCallSite<'a> {
     }
 
     /// Callback local for tuple-return sync builtins: `size - 2` (before `this`).
-    pub fn capture_callback(&mut self) -> Option<crate::runner::builtin_async::ScriptCallback> {
-        crate::runner::builtin_async::capture_script_callback(self.vm, self.size - 2)
+    pub fn capture_callback(&mut self) -> Option<crate::builtin::builtin_async::ScriptCallback> {
+        crate::builtin::builtin_async::capture_script_callback(self.vm, self.size - 2)
     }
 
     /// Like [`capture_callback`] for `callback = "persistent"` builtins.
-    pub fn capture_callback_persistent(&mut self) -> Option<crate::runner::builtin_async::ScriptCallback> {
-        crate::runner::builtin_async::capture_script_callback_persistent(self.vm, self.size - 2)
+    pub fn capture_callback_persistent(&mut self) -> Option<crate::builtin::builtin_async::ScriptCallback> {
+        crate::builtin::builtin_async::capture_script_callback_persistent(self.vm, self.size - 2)
     }
 
     pub fn arg_scalar(&mut self, index: LInt) -> Option<BoyiaScalar> {

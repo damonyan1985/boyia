@@ -547,22 +547,22 @@ fn is_sync_callback_arg_type(ty: &Type) -> bool {
 fn callback_arg_push(elem_ty: &Type, var: &syn::Ident) -> syn::Result<proc_macro2::TokenStream> {
     let push = match type_last_ident(elem_ty).as_deref() {
         Some("String") => quote! {
-            ::boyia_plugin_sdk::runner::builtin_sync::push_callback_string(#var, site.vm())
+            ::boyia_plugin_sdk::builtin::builtin_sync::push_callback_string(#var, site.vm())
         },
         Some("bool") => quote! {
-            ::boyia_plugin_sdk::runner::builtin_sync::push_callback_bool(#var, site.vm())
+            ::boyia_plugin_sdk::builtin::builtin_sync::push_callback_bool(#var, site.vm())
         },
         Some("f32") => quote! {
-            ::boyia_plugin_sdk::runner::builtin_sync::push_callback_f64(#var as f64, site.vm())
+            ::boyia_plugin_sdk::builtin::builtin_sync::push_callback_f64(#var as f64, site.vm())
         },
         Some("f64") => quote! {
-            ::boyia_plugin_sdk::runner::builtin_sync::push_callback_f64(#var, site.vm())
+            ::boyia_plugin_sdk::builtin::builtin_sync::push_callback_f64(#var, site.vm())
         },
         Some("i8" | "i16" | "i32" | "i64" | "isize") => quote! {
-            ::boyia_plugin_sdk::runner::builtin_sync::push_callback_int(#var as i64, site.vm())
+            ::boyia_plugin_sdk::builtin::builtin_sync::push_callback_int(#var as i64, site.vm())
         },
         Some("u8" | "u16" | "u32" | "u64" | "usize") => quote! {
-            ::boyia_plugin_sdk::runner::builtin_sync::push_callback_int(#var as i64, site.vm())
+            ::boyia_plugin_sdk::builtin::builtin_sync::push_callback_int(#var as i64, site.vm())
         },
         Some(other) => {
             return Err(syn::Error::new_spanned(
@@ -593,7 +593,7 @@ fn async_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> 
             let #name = {
                 let raw = ::boyia_plugin_sdk::some_or_end!(site.arg_boyia_value(#index));
                 ::boyia_plugin_sdk::some_or_end!(unsafe {
-                    ::boyia_plugin_sdk::runner::builtin_json::boyia_value_to_json(site.vm(), raw).ok()
+                    ::boyia_plugin_sdk::builtin::builtin_json::boyia_value_to_json(site.vm(), raw).ok()
                 })
             };
         });
@@ -672,7 +672,7 @@ fn sync_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> {
                     if val.is_null() { None } else { Some(val) }
                 });
                 ::boyia_plugin_sdk::some_or_end!(unsafe {
-                    ::boyia_plugin_sdk::runner::builtin_vec::boyia_value_to_vec_usize(site.vm(), raw).ok()
+                    ::boyia_plugin_sdk::builtin::builtin_vec::boyia_value_to_vec_usize(site.vm(), raw).ok()
                 })
             };
         });
@@ -688,7 +688,7 @@ fn sync_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> {
                     if val.is_null() { None } else { Some(val) }
                 });
                 ::boyia_plugin_sdk::some_or_end!(unsafe {
-                    ::boyia_plugin_sdk::runner::builtin_vec::boyia_value_to_nested_vec(site.vm(), raw).ok()
+                    ::boyia_plugin_sdk::builtin::builtin_vec::boyia_value_to_nested_vec(site.vm(), raw).ok()
                 })
             };
         });
@@ -704,7 +704,7 @@ fn sync_arg_extraction(arg: &ArgInfo) -> syn::Result<proc_macro2::TokenStream> {
                     if val.is_null() { None } else { Some(val) }
                 });
                 ::boyia_plugin_sdk::some_or_end!(unsafe {
-                    ::boyia_plugin_sdk::runner::builtin_json::boyia_value_to_json(site.vm(), raw).ok()
+                    ::boyia_plugin_sdk::builtin::builtin_json::boyia_value_to_json(site.vm(), raw).ok()
                 })
             };
         });
@@ -850,7 +850,7 @@ fn expand_async_method(
         fn #schedule_name(
             ctx: &::boyia_plugin_sdk::embedder::BuiltinCtx,
             #( #arg_names: #arg_types, )*
-            callback: ::boyia_plugin_sdk::runner::builtin_async::ScriptCallback,
+            callback: ::boyia_plugin_sdk::builtin::builtin_async::ScriptCallback,
         ) -> bool {
             ctx.spawn(
                 move || #struct_ty::#work_name( #( #arg_names, )* ),
@@ -859,7 +859,7 @@ fn expand_async_method(
             )
         }
 
-        fn #handler_name(site: &mut ::boyia_plugin_sdk::runner::builtin_async::CallSite<'_>) -> ::boyia_plugin_sdk::boyia_vm::OpHandleResult {
+        fn #handler_name(site: &mut ::boyia_plugin_sdk::builtin::builtin_async::CallSite<'_>) -> ::boyia_plugin_sdk::boyia_vm::OpHandleResult {
             #( #arg_extractions )*
             let callback = ::boyia_plugin_sdk::some_or_end!(site.callback());
             site.finish(#schedule_name(site.ctx(), #( #arg_names, )* callback))
@@ -986,7 +986,7 @@ fn expand_sync_method(
             let __sync_result = #work_call;
             #state_epilogue
             let _ = __sync_result;
-            ::boyia_plugin_sdk::runner::builtin_sync::set_sync_return((), site.vm())
+            ::boyia_plugin_sdk::builtin::builtin_sync::set_sync_return((), site.vm())
         }
     } else if let Some(tuple_elems) = &tuple_return {
         let tuple_vars: Vec<_> = (0..tuple_elems.len())
@@ -1004,19 +1004,19 @@ fn expand_sync_method(
             let (#( #tuple_vars, )*) = __sync_result;
             let mut __callback_args = Vec::new();
             #( #callback_pushes )*
-            let _ = ::boyia_plugin_sdk::runner::builtin_async::invoke_script_callback(
+            let _ = ::boyia_plugin_sdk::builtin::builtin_async::invoke_script_callback(
                 site.vm(),
                 __callback,
                 &mut __callback_args,
             );
-            ::boyia_plugin_sdk::runner::builtin_sync::set_sync_return((), site.vm())
+            ::boyia_plugin_sdk::builtin::builtin_sync::set_sync_return((), site.vm())
         }
     } else if is_option_vec_usize(&return_ty) {
         quote! {
             let __sync_result = #work_call;
             #state_epilogue
             match __sync_result {
-                Some(v) => ::boyia_plugin_sdk::runner::builtin_vec::set_sync_vec_usize_return(v, site.vm()),
+                Some(v) => ::boyia_plugin_sdk::builtin::builtin_vec::set_sync_vec_usize_return(v, site.vm()),
                 None => ::boyia_plugin_sdk::boyia_vm::OpHandleResult::kOpResultEnd,
             }
         }
@@ -1024,14 +1024,14 @@ fn expand_sync_method(
         quote! {
             let __sync_result = #work_call;
             #state_epilogue
-            ::boyia_plugin_sdk::runner::builtin_sync::set_sync_vec_scalar_return(__sync_result, site.vm())
+            ::boyia_plugin_sdk::builtin::builtin_sync::set_sync_vec_scalar_return(__sync_result, site.vm())
         }
     } else if is_option_json_value(&return_ty) {
         quote! {
             let __sync_result = #work_call;
             #state_epilogue
             match __sync_result {
-                Some(j) => ::boyia_plugin_sdk::runner::builtin_json::set_sync_json_return(j, site.vm()),
+                Some(j) => ::boyia_plugin_sdk::builtin::builtin_json::set_sync_json_return(j, site.vm()),
                 None => ::boyia_plugin_sdk::boyia_vm::OpHandleResult::kOpResultEnd,
             }
         }
@@ -1039,12 +1039,12 @@ fn expand_sync_method(
         quote! {
             let __sync_result = #work_call;
             #state_epilogue
-            ::boyia_plugin_sdk::runner::builtin_sync::set_sync_return(__sync_result, site.vm())
+            ::boyia_plugin_sdk::builtin::builtin_sync::set_sync_return(__sync_result, site.vm())
         }
     };
 
     Ok(quote! {
-        fn #handler_name(site: &mut ::boyia_plugin_sdk::runner::builtin_sync::SyncCallSite<'_>) -> ::boyia_plugin_sdk::boyia_vm::OpHandleResult {
+        fn #handler_name(site: &mut ::boyia_plugin_sdk::builtin::builtin_sync::SyncCallSite<'_>) -> ::boyia_plugin_sdk::boyia_vm::OpHandleResult {
             #state_prelude
             #persistent_bind
             #( #arg_extractions )*
@@ -1120,7 +1120,7 @@ fn expand_class(class_config: &ClassConfig, imp: &ItemImpl) -> syn::Result<proc_
         impl_methods.push(quote! { #func });
 
         attach_calls.push(quote! {
-            ::boyia_plugin_sdk::runner::builtin_async::attach_method(gen_id, #method_lit, #native_name, class_body, vm);
+            ::boyia_plugin_sdk::builtin::builtin_async::attach_method(gen_id, #method_lit, #native_name, class_body, vm);
         });
     }
 
@@ -1174,7 +1174,7 @@ fn expand_class(class_config: &ClassConfig, imp: &ItemImpl) -> syn::Result<proc_
             vm: &mut ::boyia_plugin_sdk::boyia_vm::BoyiaVM,
             gen_id: &mut dyn FnMut(&str) -> ::boyia_plugin_sdk::boyia_vm::LUintPtr,
         ) {
-            ::boyia_plugin_sdk::runner::builtin_async::register_async_builtin_class(vm, gen_id, #class_name, |class_body, vm, gen_id| {
+            ::boyia_plugin_sdk::builtin::builtin_async::register_async_builtin_class(vm, gen_id, #class_name, |class_body, vm, gen_id| {
                 #attach_props
                 #( #attach_calls )*
             });
@@ -1362,7 +1362,7 @@ fn expand_boyia_native_object(
             };
             let cb_field: Field = syn::parse_quote! {
                 #[allow(dead_code)]
-                #cb_ident: Option<::boyia_plugin_sdk::runner::builtin_async::ScriptCallback>
+                #cb_ident: Option<::boyia_plugin_sdk::builtin::builtin_async::ScriptCallback>
             };
             named.named.push(ctx_field);
             named.named.push(cb_field);
@@ -1394,7 +1394,7 @@ fn expand_boyia_native_object(
             fn #bind_fn(
                 &mut self,
                 ctx: ::boyia_plugin_sdk::embedder::BuiltinCtx,
-                callback: ::boyia_plugin_sdk::runner::builtin_async::ScriptCallback,
+                callback: ::boyia_plugin_sdk::builtin::builtin_async::ScriptCallback,
             ) {
                 self.#release_fn();
                 self.#ctx_field = Some(ctx);
@@ -1416,7 +1416,7 @@ fn expand_boyia_native_object(
                     let Some(vm) = (unsafe { ::boyia_plugin_sdk::boyia_vm::vm_from_void(vm_ptr) }) else {
                         return;
                     };
-                    ::boyia_plugin_sdk::runner::builtin_async::release_script_callback(vm, callback);
+                    ::boyia_plugin_sdk::builtin::builtin_async::release_script_callback(vm, callback);
                 });
             }
 
@@ -1424,14 +1424,14 @@ fn expand_boyia_native_object(
                 &self,
             ) -> Option<(
                 ::boyia_plugin_sdk::embedder::BuiltinCtx,
-                ::boyia_plugin_sdk::runner::builtin_async::ScriptCallback,
+                ::boyia_plugin_sdk::builtin::builtin_async::ScriptCallback,
             )> {
                 Some((self.#ctx_field.as_ref()?.clone(), self.#cb_field.as_ref()?.clone()))
             }
 
             fn #emit_fn<F>(
                 ctx: ::boyia_plugin_sdk::embedder::BuiltinCtx,
-                callback: ::boyia_plugin_sdk::runner::builtin_async::ScriptCallback,
+                callback: ::boyia_plugin_sdk::builtin::builtin_async::ScriptCallback,
                 build_args: F,
             ) -> bool
             where
@@ -1448,7 +1448,7 @@ fn expand_boyia_native_object(
                     let Some(mut args) = build_args(vm) else {
                         return;
                     };
-                    let _ = ::boyia_plugin_sdk::runner::builtin_async::invoke_script_callback_persistent(
+                    let _ = ::boyia_plugin_sdk::builtin::builtin_async::invoke_script_callback_persistent(
                         vm,
                         callback,
                         &mut args,

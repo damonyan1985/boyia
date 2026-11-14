@@ -1,8 +1,7 @@
 //! Load cdylib plugins that export `boyia_plugin_registrars_ptr` / `_len`.
 
-use boyia_plugin_sdk::layout::{default_plugin_dirs, ENV_ENABLE, ENV_PLUGIN_DIRS, ENV_STRICT};
-use boyia_plugin_sdk::BuiltinRegistrar;
-use boyia_plugin_sdk::BuiltinCtx;
+use crate::layout::{default_plugin_dirs, ENV_ENABLE, ENV_PLUGIN_DIRS, ENV_STRICT};
+use crate::{BuiltinCtx, BuiltinRegistrar};
 use boyia_vm::BoyiaVM;
 use libloading::{Library, Symbol};
 use std::path::{Path, PathBuf};
@@ -110,7 +109,7 @@ impl PluginRegistry {
         })
     }
 
-    /// Each cdylib has its own `HOST_CTX_GETTER`; bind the CLI getter into every loaded plugin.
+    /// Each cdylib has its own `HOST_CTX_GETTER`; bind the host getter into every loaded plugin.
     pub fn bind_host_ctx(&self, getter: fn(&mut BoyiaVM) -> Option<BuiltinCtx>) {
         type BindFn = unsafe extern "C" fn(fn(&mut BoyiaVM) -> Option<BuiltinCtx>);
         for library in &self._libraries {

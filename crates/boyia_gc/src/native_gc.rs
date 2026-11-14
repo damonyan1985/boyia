@@ -25,17 +25,21 @@ pub struct NativePropVTable {
 #[repr(C)]
 pub struct NativePropHeader {
     pub vtable: *const NativePropVTable,
-    pub gc_mark: u8,
-    _pad: [u8; 7],
+    /// GC color word, sized to fill the slot so no explicit padding is needed.
+    pub gc_mark: usize,
 }
+
+// Header is exactly two machine words on every target (one for the vtable, one for the color).
+const _: () = assert!(
+    std::mem::size_of::<NativePropHeader>() == 2 * std::mem::size_of::<usize>()
+);
 
 impl NativePropHeader {
     #[inline]
     pub fn new(vtable: &'static NativePropVTable) -> Self {
         Self {
             vtable,
-            gc_mark: K_NATIVE_GC_WHITE,
-            _pad: [0; 7],
+            gc_mark: K_NATIVE_GC_WHITE as usize,
         }
     }
 }
@@ -48,12 +52,12 @@ pub trait NativePropTrait: Sized {
 
     #[inline]
     unsafe fn native_mark(ptr: *mut LVoid, color: u8) {
-        (*header(ptr)).gc_mark = color;
+        (*header(ptr)).gc_mark = color as usize;
     }
 
     #[inline]
     unsafe fn native_flag(ptr: *mut LVoid) -> u8 {
-        (*header(ptr)).gc_mark
+        (*header(ptr)).gc_mark as u8
     }
 
     unsafe fn native_drop(ptr: *mut LVoid);
@@ -71,7 +75,7 @@ pub unsafe fn mark(ptr: *mut LVoid, color: LInt) {
     }
     let hdr = &mut *header(ptr);
     let Some(vt) = hdr.vtable.as_ref() else {
-        hdr.gc_mark = color as u8;
+        hdr.gc_mark = color as usize;
         return;
     };
     (vt.mark_fn)(ptr, color as u8);

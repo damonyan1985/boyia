@@ -3,7 +3,7 @@
 
 use boyia_builtins::gen_builtin_class_function;
 use crate::embedder::BuiltinCtx;
-use crate::runner::builtin_json::json_to_boyia_value;
+use crate::builtin::builtin_json::json_to_boyia_value;
 use boyia_runtime::BoyiaRuntime;
 use boyia_vm::{
     copy_object, create_global_class, create_native_string, create_string_object, gen_identifier_from_str,

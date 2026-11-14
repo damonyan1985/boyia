@@ -132,7 +132,7 @@ cargo run -- test/hashmap.boyia
 
 ## Host 实现要点
 
-- `examples/boyia_cli/src/runner/plugin_loader.rs`：扫描目录、`libloading` 收集 registrar。
+- `examples/boyia_plugin_sdk/src/plugin_loader.rs`：扫描目录、`libloading` 收集 registrar（SDK feature `plugin-loader`）。
 - `examples/boyia_cli/src/runner/cli_async_host.rs`：`impl BuiltinAsyncHost for CliBuiltinAsyncHost`。
 - `boyia_plugin_sdk::set_host_ctx_getter`：避免 cdylib 内对 `SdkEmbedder` 的跨模块 `TypeId` downcast 失败。
 
