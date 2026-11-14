@@ -6,13 +6,14 @@ use super::cli_async_host::CliBuiltinAsyncHost;
 use super::run_loop::RunLoopError;
 use super::task_thread::TaskThread;
 use super::thread_pool::ThreadPool;
-use super::{BuiltinRegistrar, PluginRegistry};
-use boyia_plugin_sdk::{set_host_ctx_getter, BuiltinCtx, SdkEmbedder};
+use boyia_plugin_sdk::{
+    set_host_ctx_getter, BuiltinCtx, BuiltinRegistrar, PluginRegistry, SdkEmbedder,
+};
 use boyia_runtime::{boyia_runtime_from_vm, BoyiaRuntime};
 use boyia_vm::BoyiaVM;
 use std::sync::{mpsc, Arc};
 
-const DEFAULT_HTTPS_THREAD_COUNT: usize = 4;
+const DEFAULT_POOL_THREAD_COUNT: usize = 4;
 
 pub struct BoyiaRunner {
     boyia_thread: Option<TaskThread<Box<BoyiaRuntime>>>,
@@ -39,19 +40,19 @@ impl BoyiaRunner {
 
     pub fn create_with_thread_pool(
         builtins: Vec<BuiltinRegistrar>,
-        https_thread_count: usize,
+        pool_thread_count: usize,
     ) -> Box<Self> {
-        Self::create_impl_with_pool(builtins, None, https_thread_count)
+        Self::create_impl_with_pool(builtins, None, pool_thread_count)
     }
 
     fn create_impl(builtins: Vec<BuiltinRegistrar>, plugins: Option<PluginRegistry>) -> Box<Self> {
-        Self::create_impl_with_pool(builtins, plugins, DEFAULT_HTTPS_THREAD_COUNT)
+        Self::create_impl_with_pool(builtins, plugins, DEFAULT_POOL_THREAD_COUNT)
     }
 
     fn create_impl_with_pool(
         builtins: Vec<BuiltinRegistrar>,
         plugins: Option<PluginRegistry>,
-        https_thread_count: usize,
+        pool_thread_count: usize,
     ) -> Box<Self> {
         let (ready_tx, ready_rx) = mpsc::channel();
 
@@ -63,7 +64,7 @@ impl BoyiaRunner {
         });
 
         let ready = ready_rx.recv().unwrap_or(false);
-        let thread_pool = Arc::new(ThreadPool::new(https_thread_count));
+        let thread_pool = Arc::new(ThreadPool::new(pool_thread_count));
 
         let runner = Self {
             boyia_thread: Some(task_thread),
