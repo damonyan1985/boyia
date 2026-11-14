@@ -85,6 +85,8 @@ pub enum AsyncBuiltinResult {
     /// Parsed JSON converted to a Boyia Map/Array/String/number on the VM thread.
     OkJson(serde_json::Value),
     Fail { message: String },
+    /// Timer was cancelled before firing: do not invoke the script callback, just release it.
+    Cancelled,
 }
 
 impl AsyncBuiltinResult {
@@ -94,6 +96,7 @@ impl AsyncBuiltinResult {
             AsyncBuiltinResult::Ok { data: None } => "",
             AsyncBuiltinResult::OkJson(_) => "<json>",
             AsyncBuiltinResult::Fail { message } => message.as_str(),
+            AsyncBuiltinResult::Cancelled => "<cancelled>",
         }
     }
 }
@@ -108,7 +111,9 @@ pub struct CallSite<'a> {
 impl<'a> CallSite<'a> {
     pub fn open(vm: &'a mut BoyiaVM, min_locals: LInt) -> Option<Self> {
         let size = unsafe { get_local_size(vm) };
+        eprintln!("[dbg] CallSite::open: size={} min_locals={}", size, min_locals);
         if size < min_locals {
+            eprintln!("[dbg] size < min_locals -> None");
             return None;
         }
         let ctx = BuiltinCtx::from_vm(vm)?;
@@ -149,7 +154,9 @@ impl<'a> CallSite<'a> {
     /// Callback is always the local immediately before `this` (`size - 2`).
     pub fn callback(&mut self) -> Option<ScriptCallback> {
         let index = self.size - 2;
+        eprintln!("[dbg] callback: size={} index={}", self.size, index);
         let val = unsafe { get_local_value(index, self.vm) as *const BoyiaValue };
+        eprintln!("[dbg] callback: val={:p}", val);
         unsafe { make_callback_info(self.vm, val) }.map(ScriptCallback)
     }
 
@@ -232,10 +239,14 @@ fn value_to_string(value: *const BoyiaValue) -> Option<String> {
 }
 
 unsafe fn make_callback_info(vm: &mut BoyiaVM, callback_val: *const BoyiaValue) -> Option<CallbackInfo> {
+    eprintln!("[dbg] make_callback_info: callback_val={:p}", callback_val);
     if callback_val.is_null() {
+        eprintln!("[dbg] callback_val null -> None");
         return None;
     }
+    eprintln!("[dbg] reading mValue.mObj.mSuper");
     let object_addr = (*callback_val).mValue.mObj.mSuper;
+    eprintln!("[dbg] object_addr={:p}", object_addr as *const u8);
     let object_value = BoyiaValue {
         mNameKey: 0,
         mValueType: ValueType::BY_CLASS,
@@ -246,14 +257,20 @@ unsafe fn make_callback_info(vm: &mut BoyiaVM, callback_val: *const BoyiaValue) 
             },
         },
     };
+    eprintln!("[dbg] getting runtime from vm");
     let object_global = {
         let rt = boyia_vm::get_runtime_from_vm(vm);
+        eprintln!("[dbg] rt={:p}", rt as *const u8);
         if rt.is_null() {
             std::ptr::null_mut()
         } else {
-            (*rt).persistent_object(&object_value as *const BoyiaValue)
+            eprintln!("[dbg] calling persistent_object");
+            let g = (*rt).persistent_object(&object_value as *const BoyiaValue);
+            eprintln!("[dbg] persistent_object -> {:p}", g as *const u8);
+            g
         }
     };
+    eprintln!("[dbg] make_callback_info done");
     Some(CallbackInfo {
         callee: *callback_val,
         object_global,
@@ -356,6 +373,7 @@ unsafe fn build_async_result_map(vm: &mut BoyiaVM, r: &AsyncBuiltinResult) -> Op
     let status_s = match r {
         AsyncBuiltinResult::Ok { .. } | AsyncBuiltinResult::OkJson(_) => "ok",
         AsyncBuiltinResult::Fail { .. } => "fail",
+        AsyncBuiltinResult::Cancelled => unreachable!("Cancelled handled before build_async_result_map"),
     };
     let status_val = native_string_value(vm, status_s)?;
     if !map_put_str_key(vm, &mut map_val, "status", &status_val) {
@@ -385,6 +403,7 @@ unsafe fn build_async_result_map(vm: &mut BoyiaVM, r: &AsyncBuiltinResult) -> Op
                 return None;
             }
         }
+        AsyncBuiltinResult::Cancelled => unreachable!("Cancelled handled before build_async_result_map"),
     }
     Some(map_val)
 }
@@ -451,6 +470,14 @@ unsafe fn callback_async_result(
     callback: CallbackInfo,
     runtime: &mut BoyiaRuntime,
 ) {
+    // Cancelled timers must not invoke the script callback; just release captures.
+    if matches!(result, AsyncBuiltinResult::Cancelled) {
+        if !callback.object_global.is_null() {
+            runtime.remove_persistent(callback.object_global);
+        }
+        return;
+    }
+
     let vm_ptr = runtime.vm();
     if vm_ptr.is_null() {
         if !callback.object_global.is_null() {

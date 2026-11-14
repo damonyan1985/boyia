@@ -69,10 +69,19 @@ struct AsyncMethodConfig {
     before: Option<syn::Path>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SyncCallbackMode {
+    None,
+    /// Callback is stored on the native object and emitted later (`persistent_callbacks`).
+    Persistent,
+    /// Callback is injected into the work fn, which owns invoking/releasing it.
+    Owned,
+}
+
 struct SyncMethodConfig {
     native: Option<syn::Ident>,
     method: LitStr,
-    callback_persistent: bool,
+    callback: SyncCallbackMode,
 }
 
 #[derive(Default)]
@@ -178,7 +187,7 @@ impl Parse for SyncMethodConfig {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let mut native = None;
         let mut method = None;
-        let mut callback_persistent = false;
+        let mut callback = SyncCallbackMode::None;
 
         while !input.is_empty() {
             let key: syn::Ident = input.parse()?;
@@ -189,12 +198,13 @@ impl Parse for SyncMethodConfig {
                 "callback" => {
                     let mode = parse_string_lit(input)?;
                     match mode.value().as_str() {
-                        "persistent" => callback_persistent = true,
+                        "persistent" => callback = SyncCallbackMode::Persistent,
+                        "owned" => callback = SyncCallbackMode::Owned,
                         other => {
                             return Err(syn::Error::new_spanned(
                                 mode,
                                 format!(
-                                    "unsupported callback mode `{other}`; expected `persistent`"
+                                    "unsupported callback mode `{other}`; expected `persistent` or `owned`"
                                 ),
                             ));
                         }
@@ -229,7 +239,7 @@ impl Parse for SyncMethodConfig {
             method: method.ok_or_else(|| {
                 syn::Error::new(Span::call_site(), "missing `method = \"...\"` in attribute")
             })?,
-            callback_persistent,
+            callback,
         })
     }
 }
@@ -884,7 +894,7 @@ fn expand_sync_method(
     };
     validate_sync_return(&return_ty)?;
     let tuple_return = parse_sync_tuple_return(&return_ty);
-    if config.callback_persistent {
+    if config.callback == SyncCallbackMode::Persistent {
         if self_arg == SelfArg::None {
             return Err(syn::Error::new_spanned(
                 func,
@@ -898,7 +908,31 @@ fn expand_sync_method(
             ));
         }
     }
-    let normal_args = args.as_slice();
+    if config.callback == SyncCallbackMode::Owned && tuple_return.is_some() {
+        return Err(syn::Error::new_spanned(
+            &func.sig.output,
+            "`callback = \"owned\"` cannot be combined with a tuple return",
+        ));
+    }
+    // owned: the callback is captured by the macro and injected as the last work argument,
+    // so it is neither a script argument nor something the work fn declares in its body.
+    let owned_callback = if config.callback == SyncCallbackMode::Owned {
+        match args.last() {
+            Some(last) if is_script_callback_type(&last.ty) => Some(&last.name),
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    &func.sig,
+                    "`callback = \"owned\"` requires the last parameter to be `ScriptCallback`",
+                ))
+            }
+        }
+    } else {
+        None
+    };
+    let normal_args: &[ArgInfo] = match owned_callback {
+        Some(_) => &args[..args.len() - 1],
+        None => args.as_slice(),
+    };
 
     let work_name = &func.sig.ident;
     let handler_name = format_ident!("{}_handler", work_name);
@@ -907,7 +941,7 @@ fn expand_sync_method(
         .iter()
         .filter(|a| a.consumes_script_arg && a.optional_default.is_none())
         .count();
-    let has_callback_slot = tuple_return.is_some() || config.callback_persistent;
+    let has_callback_slot = tuple_return.is_some() || config.callback != SyncCallbackMode::None;
     let min_locals = if has_callback_slot {
         if self_arg != SelfArg::None {
             (required_args + 3) as i32
@@ -929,19 +963,16 @@ fn expand_sync_method(
         .map(|name| quote! { #name })
         .collect();
 
-    let work_call = if self_arg != SelfArg::None {
-        match self_arg {
-            SelfArg::Ref | SelfArg::Mut => {
-                quote! { #struct_ty::#work_name(state, #( #call_arg_names, )*) }
-            }
-            SelfArg::None => unreachable!(),
-        }
+    let work_args = if owned_callback.is_some() {
+        quote! { #( #call_arg_names, )* __boyia_owned_callback }
     } else {
-        match self_arg {
-            SelfArg::None => quote! { #struct_ty::#work_name( #( #call_arg_names, )* ) },
-            SelfArg::Ref => quote! { #struct_ty::#work_name(&state, #( #call_arg_names, )*) },
-            SelfArg::Mut => quote! { #struct_ty::#work_name(&mut state, #( #call_arg_names, )*) },
-        }
+        quote! { #( #call_arg_names, )* }
+    };
+
+    let work_call = if self_arg != SelfArg::None {
+        quote! { #struct_ty::#work_name(state, #work_args) }
+    } else {
+        quote! { #struct_ty::#work_name( #work_args ) }
     };
 
     let (state_prelude, state_epilogue) = if self_arg != SelfArg::None {
@@ -969,7 +1000,7 @@ fn expand_sync_method(
         (quote! {}, quote! {})
     };
 
-    let persistent_bind = if config.callback_persistent {
+    let persistent_bind = if config.callback == SyncCallbackMode::Persistent {
         let method_suffix = method_suffix_ident(&config.method.value());
         let bind_fn = format_ident!("__boyia_bind_{}", method_suffix);
         quote! {
@@ -981,7 +1012,17 @@ fn expand_sync_method(
         quote! {}
     };
 
-    let finish = if config.callback_persistent {
+    let owned_capture = if owned_callback.is_some() {
+        quote! {
+            let __boyia_owned_callback = ::boyia_plugin_sdk::some_or_end!(
+                site.capture_callback_persistent()
+            );
+        }
+    } else {
+        quote! {}
+    };
+
+    let finish = if config.callback == SyncCallbackMode::Persistent {
         quote! {
             let __sync_result = #work_call;
             #state_epilogue
@@ -1047,6 +1088,7 @@ fn expand_sync_method(
         fn #handler_name(site: &mut ::boyia_plugin_sdk::builtin::builtin_sync::SyncCallSite<'_>) -> ::boyia_plugin_sdk::boyia_vm::OpHandleResult {
             #state_prelude
             #persistent_bind
+            #owned_capture
             #( #arg_extractions )*
             #finish
         }
@@ -1526,6 +1568,11 @@ pub fn boyia_native_object(attr: TokenStream, item: TokenStream) -> TokenStream 
 ///
 ///     #[boyia_sync_builtin(method = "isAbsolute")]
 ///     fn file_is_absolute(path: String) -> bool { ... }
+///
+///     // `callback = "owned"`: the plugin keeps the callback for a later invocation
+///     // (timers, event sources) and must invoke or release it exactly once.
+///     #[boyia_sync_builtin(method = "setTimeout", callback = "owned")]
+///     fn set_timeout(ctx: BuiltinCtx, ms: usize, callback: ScriptCallback) -> usize { ... }
 /// }
 /// ```
 #[proc_macro_attribute]

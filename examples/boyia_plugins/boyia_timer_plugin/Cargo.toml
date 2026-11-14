@@ -1,0 +1,18 @@
+[package]
+name = "boyia_timer_plugin"
+version = "0.1.0"
+edition = "2021"
+description = "Boyia Timer builtin as a dylib plugin (setTimeout/clearTimeout/setInterval/clearInterval)"
+build = "../../boyia_plugin_sdk/build/plugin_install.rs"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+boyia_plugin_sdk = { path = "../../boyia_plugin_sdk" }
+# mio: epoll (Linux), IOCP (Windows), kqueue (macOS). Used by TimerScheduler's
+# dedicated thread as the timed-wake primitive (same role as Chromium's message pump).
+mio = { version = "1", features = ["os-poll"] }
+
+[build-dependencies]
+boyia_plugin_sdk = { path = "../../boyia_plugin_sdk", features = ["build-install"] }

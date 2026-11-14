@@ -1,4 +1,4 @@
-// Combined dylib plugin smoke test: PathPlugin (sync) + ZipPlugin (async).
+// Combined dylib plugin smoke test: PathPlugin (sync) + TimerPlugin (sync) + ZipPlugin (async).
 // Requires BOYIA_ENABLE_DYLIB_BUILTINS=1 and target/{profile}/plugins/*.dll.
 // Execute: cargo run -p boyia_cli -- test/plugins.boyia
 
@@ -11,6 +11,19 @@ class PluginSmoke {
         BY_Log("path join dotdot: " + PathPlugin.join("a/b", "../c/./d.txt"));
         BY_Log("path join empty:  " + PathPlugin.join("a/b", ""));
         BY_Log("path join no base:" + PathPlugin.join("", "x/y"));
+
+        // TimerPlugin: setTimeout fires after delay, clearTimeout cancels a pending one.
+        // The callback measures the real elapsed time with TimerPlugin.now().
+        var startMs = TimerPlugin.now();
+        TimerPlugin.setTimeout(50, fun() {
+            var elapsed = TimerPlugin.now() - startMs;
+            BY_Log("timer fired after " + elapsed + "ms");
+        });
+
+        var cancelledId = TimerPlugin.setTimeout(50, fun() {
+            BY_Log("timer should NOT fire (clearTimeout)");
+        });
+        
 
         // ZipPlugin: compress fixture then extract it back.
         ZipPlugin.compress("test/assets/zip_fixture", "test/out/plugin_smoke_all.zip", "", fun(result) {

@@ -14,4 +14,5 @@ members = [
     "examples/boyia_plugin_sdk",
     "examples/boyia_plugins/boyia_zip_plugin",
     "examples/boyia_plugins/boyia_path_plugin",
+    "examples/boyia_plugins/boyia_timer_plugin",
 ]
