@@ -7,6 +7,7 @@ CLI 内置类默认静态链接在 `boyia_cli` 中。可选地通过 **cdylib �
 - Host（`boyia_cli`）与每个插件 **必须在同一 workspace、同一 Rust 工具链下一起编译**。
 - 插件 dll **不能与 exe 版本混用**（无跨编译器二进制兼容保证）。
 - 加载后 **不会 unload** 动态库（保证 `BuiltinRegistrar` 函数指针有效）。
+- **懒加载（默认）**：启动只读 `<dll>.plugin.json` 建索引，脚本首次访问插件类时才 `dlopen` 对应 dll 一次。
 
 ## 工程结构
 
@@ -18,6 +19,14 @@ examples/boyia_plugins/boyia_zip_plugin/   # 示例 cdylib（Zip）
 examples/boyia_plugins/boyia_path_plugin/  # 示例 cdylib（Path）
 examples/boyia_cli/plugins/     # 可选：手动放置 dll（默认改由 SDK 布局，见下）
 ```
+
+每个插件 crate 根目录提供 `plugin.json`，声明其注册的全局类名（供宿主零加载路由）：
+
+```json
+{ "name": "boyia_zip_plugin", "classes": ["ZipPlugin"] }
+```
+
+构建时由 SDK 的 `build_install` 复制为 `target/{profile}/plugins/<dll>.plugin.json`。
 
 ### `boyia_plugin_sdk` features
 
@@ -55,6 +64,14 @@ boyia_plugin_sdk = { path = "../boyia_plugin_sdk", features = ["build-install"] 
 | `BOYIA_PLUGIN_DIRS` | `{exe}/plugins`（feature `host-exe-plugins`） | 多个目录用 `;`（Windows）或 `:`（Unix）分隔 |
 | `BOYIA_PLUGIN_STRICT` | `0` | `1` 时任一插件加载失败则 CLI 退出 |
 | `BOYIA_INIT_MINIMAL` | - | `1` 时不注册静态 builtin，也不加载插件 |
+
+> 懒加载模式下 `BOYIA_PLUGIN_STRICT` 的失败检查推迟到该插件首次被使用；未被使用的坏插件不影响运行。
+
+## Host 实现要点
+
+- `examples/boyia_plugin_sdk/src/plugin_loader.rs`：`LazyPluginLoader` 只读清单建索引；首次全局查找未命中时按索引单次 `dlopen` 并注册。
+- `crates/boyia_vm/src/lazy.rs`：`set_global_miss_hook` 提供 `find_global` 未命中回调，钩子直接返回注册后的全局值（无重试）。
+- 加载标志：POSIX 显式 `RTLD_LAZY | RTLD_LOCAL`；Windows `LoadLibraryExW` + `LOAD_WITH_ALTERED_SEARCH_PATH`。
 
 ## 编写插件
 

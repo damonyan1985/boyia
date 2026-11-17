@@ -1,0 +1,4 @@
+{
+  "name": "boyia_path_plugin",
+  "classes": ["PathPlugin"]
+}

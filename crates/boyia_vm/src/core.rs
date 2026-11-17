@@ -629,14 +629,38 @@ pub(crate) unsafe fn find_global(key: LUintPtr, vm: &mut BoyiaVM) -> *mut BoyiaV
     if vm.mGlobals.is_null() {
         return ptr::null_mut();
     }
-    for i in 0..vm.mGValSize as usize {
-        if vm.mGlobals.add(i).read().mNameKey == key {
-            return vm.mGlobals.add(i);
-        }
+    if let Some(val) = find_global_in_table(key, vm) {
+        return val;
+    }
+
+    // 未命中：宿主按需加载插件并注册。钩子直接返回结果，不做循环重试。
+    let val = crate::lazy::resolve_global_miss(vm, key);
+    if !val.is_null() {
+        return val;
     }
 
     println!("[find_global] key={} get nullptr", key);
     ptr::null_mut()
+}
+
+unsafe fn find_global_in_table(key: LUintPtr, vm: &mut BoyiaVM) -> Option<*mut BoyiaValue> {
+    if vm.mGlobals.is_null() {
+        return None;
+    }
+    for i in 0..vm.mGValSize as usize {
+        if vm.mGlobals.add(i).read().mNameKey == key {
+            return Some(vm.mGlobals.add(i));
+        }
+    }
+    None
+}
+
+/// 只查全局表，不触发懒加载钩子（供宿主在注册完成后取值）。
+pub unsafe fn find_global_now(vm: &mut BoyiaVM, key: LUintPtr) -> *mut BoyiaValue {
+    if vm.mGlobals.is_null() {
+        return ptr::null_mut();
+    }
+    find_global_in_table(key, vm).unwrap_or(ptr::null_mut())
 }
 
 fn is_object_prop_func(type_: ValueType) -> bool {

@@ -20,6 +20,15 @@ pub fn install_beside_host_exe() {
 
     let _ = std::fs::create_dir_all(&plugins_dir);
 
+    // 类名索引：复制 `plugin.json` 为 `<dll>.plugin.json`，供宿主零 dlopen 读取。
+    let manifest_src = manifest.join("plugin.json");
+    if manifest_src.is_file() {
+        let manifest_dst = install.with_extension("plugin.json");
+        if let Err(e) = std::fs::copy(&manifest_src, &manifest_dst) {
+            eprintln!("boyia_plugin_sdk: manifest install failed: {e}");
+        }
+    }
+
     // Incremental builds: previous link output may already exist before this build.rs run.
     if artifact.exists() {
         match std::fs::copy(&artifact, &install) {
@@ -29,6 +38,7 @@ pub fn install_beside_host_exe() {
     }
 
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=plugin.json");
     if artifact.exists() {
         println!("cargo:rerun-if-changed={}", artifact.display());
     }

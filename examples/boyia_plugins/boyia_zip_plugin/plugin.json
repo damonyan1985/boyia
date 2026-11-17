@@ -1,0 +1,4 @@
+{
+  "name": "boyia_zip_plugin",
+  "classes": ["ZipPlugin"]
+}

@@ -20,7 +20,8 @@ pub use host::set_host_ctx_getter;
 pub use layout::{default_plugin_dirs, ENV_ENABLE, ENV_PLUGIN_DIRS, ENV_STRICT, HOST_PLUGINS_SUBDIR};
 #[cfg(feature = "plugin-loader")]
 pub use plugin_loader::{
-    dylib_builtins_enabled, plugin_dirs_from_env, plugin_strict, PluginLoadError, PluginRegistry,
+    dylib_builtins_enabled, install_lazy_plugin_hook, plugin_dirs_from_env, plugin_strict,
+    LazyPluginLoader, PluginLoadError,
 };
 pub use registrar::BuiltinRegistrar;
 

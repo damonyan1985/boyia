@@ -13,6 +13,7 @@ mod types;
 mod compile;
 mod core;
 mod inlinecache;
+mod lazy;
 mod execute;
 
 // Re-export types for crate users (includes Runtime trait).
@@ -86,7 +87,9 @@ pub use core::{
     resume_micro_task,
     consume_micro_task,
     iterate_micro_task,
+    find_global_now,
 };
+pub use lazy::set_global_miss_hook;
 pub use execute::{
     anonym_fun_hold_for_persistent_callback, execute_code, execute_entry_range, execute_global_code,
 };

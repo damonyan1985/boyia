@@ -7,7 +7,7 @@ mod runner;
 use builtins::DEFAULT_BUILTINS;
 use cli::{parse_args, print_usage, resolve_entry_script};
 use runner::{
-    dylib_builtins_enabled, plugin_dirs_from_env, plugin_strict, BoyiaRunner, PluginRegistry,
+    dylib_builtins_enabled, plugin_dirs_from_env, plugin_strict, BoyiaRunner, LazyPluginLoader,
 };
 use boyia_plugin_sdk::BuiltinRegistrar;
 
@@ -61,17 +61,8 @@ fn main() {
     };
 
     let runner = if dylib_builtins_enabled() && !minimal {
-        match PluginRegistry::load_from_dirs(&plugin_dirs_from_env()) {
-            Ok(plugins) => BoyiaRunner::create_with_plugins(static_registrars, plugins),
-            Err(e) if plugin_strict() => {
-                eprintln!("Error: plugin load failed: {e}");
-                std::process::exit(1);
-            }
-            Err(e) => {
-                eprintln!("Warning: plugin load failed: {e}");
-                BoyiaRunner::create(&static_registrars)
-            }
-        }
+        let plugins = LazyPluginLoader::new(&plugin_dirs_from_env(), plugin_strict());
+        BoyiaRunner::create_with_lazy_plugins(static_registrars, plugins)
     } else {
         BoyiaRunner::create(&static_registrars)
     };

@@ -1,0 +1,4 @@
+{
+  "name": "boyia_timer_plugin",
+  "classes": ["TimerPlugin"]
+}

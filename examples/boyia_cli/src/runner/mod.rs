@@ -9,6 +9,6 @@ mod task_thread;
 mod thread_pool;
 
 pub use boyia_plugin_sdk::plugin_loader::{
-    dylib_builtins_enabled, plugin_dirs_from_env, plugin_strict, PluginRegistry,
+    dylib_builtins_enabled, plugin_dirs_from_env, plugin_strict, LazyPluginLoader,
 };
 pub use runner::BoyiaRunner;

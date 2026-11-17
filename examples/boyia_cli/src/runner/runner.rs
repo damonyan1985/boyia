@@ -7,7 +7,8 @@ use super::run_loop::RunLoopError;
 use super::task_thread::TaskThread;
 use super::thread_pool::ThreadPool;
 use boyia_plugin_sdk::{
-    set_host_ctx_getter, BuiltinCtx, BuiltinRegistrar, PluginRegistry, SdkEmbedder,
+    install_lazy_plugin_hook, set_host_ctx_getter, BuiltinCtx, BuiltinRegistrar, LazyPluginLoader,
+    SdkEmbedder,
 };
 use boyia_runtime::{boyia_runtime_from_vm, BoyiaRuntime};
 use boyia_vm::BoyiaVM;
@@ -19,39 +20,39 @@ pub struct BoyiaRunner {
     boyia_thread: Option<TaskThread<Box<BoyiaRuntime>>>,
     thread_pool: Option<Arc<ThreadPool>>,
     ready: bool,
-    _plugin_registry: Option<PluginRegistry>,
+    _lazy_plugins: Option<Arc<LazyPluginLoader>>,
 }
 
 impl BoyiaRunner {
     /// Create a runner and register `builtins` on the Boyia task thread after VM init.
     pub fn create(builtins: &[BuiltinRegistrar]) -> Box<Self> {
-        Self::create_impl(builtins.to_vec(), None)
+        Self::create_impl_with_pool(builtins.to_vec(), DEFAULT_POOL_THREAD_COUNT)
     }
 
-    /// Static builtins plus registrars from loaded dylib plugins.
-    pub fn create_with_plugins(
+    /// 静态 builtins + 懒加载 dylib 插件：启动零 dlopen，首次使用插件类时按索引加载。
+    pub fn create_with_lazy_plugins(
         static_builtins: Vec<BuiltinRegistrar>,
-        plugins: PluginRegistry,
+        plugins: LazyPluginLoader,
     ) -> Box<Self> {
-        let mut all = static_builtins;
-        all.extend(plugins.registrars().iter().copied());
-        Self::create_impl(all, Some(plugins))
+        let mut runner = Self::create_impl_with_pool(static_builtins, DEFAULT_POOL_THREAD_COUNT);
+        let plugins = Arc::new(plugins);
+        plugins.set_host_ctx_getter(host_ctx_getter);
+        if !install_lazy_plugin_hook(plugins.clone()) {
+            eprintln!("Warning: lazy plugin hook already installed; ignoring new registry");
+        }
+        runner._lazy_plugins = Some(plugins);
+        runner
     }
 
     pub fn create_with_thread_pool(
         builtins: Vec<BuiltinRegistrar>,
         pool_thread_count: usize,
     ) -> Box<Self> {
-        Self::create_impl_with_pool(builtins, None, pool_thread_count)
-    }
-
-    fn create_impl(builtins: Vec<BuiltinRegistrar>, plugins: Option<PluginRegistry>) -> Box<Self> {
-        Self::create_impl_with_pool(builtins, plugins, DEFAULT_POOL_THREAD_COUNT)
+        Self::create_impl_with_pool(builtins, pool_thread_count)
     }
 
     fn create_impl_with_pool(
         builtins: Vec<BuiltinRegistrar>,
-        plugins: Option<PluginRegistry>,
         pool_thread_count: usize,
     ) -> Box<Self> {
         let (ready_tx, ready_rx) = mpsc::channel();
@@ -70,7 +71,7 @@ impl BoyiaRunner {
             boyia_thread: Some(task_thread),
             thread_pool: Some(thread_pool.clone()),
             ready,
-            _plugin_registry: plugins,
+            _lazy_plugins: None,
         };
         let runner_box = Box::new(runner);
 
@@ -81,10 +82,6 @@ impl BoyiaRunner {
         let builtin_ctx = BuiltinCtx::new(async_host);
 
         set_host_ctx_getter(host_ctx_getter);
-
-        if let Some(plugins) = runner_box._plugin_registry.as_ref() {
-            plugins.bind_host_ctx(host_ctx_getter);
-        }
 
         let (init_tx, init_rx) = mpsc::channel();
         let embedder = SdkEmbedder {
