@@ -10,6 +10,7 @@ use runner::{
     dylib_builtins_enabled, plugin_dirs_from_env, plugin_strict, BoyiaRunner, LazyPluginLoader,
 };
 use boyia_plugin_sdk::BuiltinRegistrar;
+use boyia_vm::{Log, LogLevel};
 
 /// Script-relative paths in tests use the `boyia_cli` crate root (see `test/zip.boyia`).
 fn set_cli_crate_working_dir() {
@@ -21,6 +22,7 @@ fn set_cli_crate_working_dir() {
 }
 
 fn main() {
+    Log::set_level(LogLevel::None);
     set_cli_crate_working_dir();
 
     let mut env_args: Vec<String> = std::env::args().skip(1).collect();

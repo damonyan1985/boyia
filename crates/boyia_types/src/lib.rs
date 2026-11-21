@@ -7,6 +7,10 @@
 #![allow(non_camel_case_types)]
 #![allow(non_upper_case_globals)]
 
+pub mod log;
+
+pub use log::{Log, LogLevel};
+
 pub type LInt8 = std::os::raw::c_char;
 pub type LInt = std::os::raw::c_int;
 pub type LUint = std::os::raw::c_uint;

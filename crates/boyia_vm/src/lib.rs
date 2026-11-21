@@ -18,6 +18,7 @@ mod execute;
 
 // Re-export types for crate users (includes Runtime trait).
 pub use types::*;
+pub use boyia_types::{Log, LogLevel};
 pub use global::{Global, GlobalList};
 
 // Re-export memory API from boyia_memory for backward compatibility.

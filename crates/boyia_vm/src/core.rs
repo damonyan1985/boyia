@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 use crate::types::*;
+use crate::Log;
 use crate::Runtime;
 use boyia_memory::{
     alloc_memory_chunk, create_memory_cache, destroy_memory_cache, free_memory_chunk,
@@ -457,11 +458,11 @@ pub unsafe fn init_vm(creator: *mut dyn Runtime) -> *mut LVoid {
 
 /// Initialize VM with runtime (creator). Returns `None` on failure.
 pub unsafe fn init_vm_boxed(creator: *mut dyn Runtime) -> Option<Box<BoyiaVM>> {
-    eprintln!("[init_vm] 1 alloc BoyiaVM");
+    Log::debug(format_args!("[init_vm] 1 alloc BoyiaVM"));
     let layout = Layout::new::<BoyiaVM>();
     let vm_ptr = alloc_zeroed(layout) as *mut BoyiaVM;
     if vm_ptr.is_null() {
-        eprintln!("[init_vm] ERROR vm_ptr null");
+        Log::error(format_args!("[init_vm] ERROR vm_ptr null"));
         return None;
     }
     let vm = &mut *vm_ptr;
@@ -473,16 +474,16 @@ pub unsafe fn init_vm_boxed(creator: *mut dyn Runtime) -> Option<Box<BoyiaVM>> {
     vm.mStrTable = VMStrTable::new();
     vm.mEntry = VMEntryTable::new();
 
-    eprintln!("[init_vm] 2 alloc Globals");
+    Log::debug(format_args!("[init_vm] 2 alloc Globals"));
     let globals_layout = Layout::array::<BoyiaValue>(NUM_GLOBAL_VARS).unwrap();
     vm.mGlobals = alloc_zeroed(globals_layout) as *mut BoyiaValue;
     if vm.mGlobals.is_null() {
-        eprintln!("[init_vm] ERROR mGlobals alloc null");
+        Log::error(format_args!("[init_vm] ERROR mGlobals alloc null"));
         init_vm_abort(vm_ptr, InitVmStage::VmShell);
         return None;
     }
 
-    eprintln!("[init_vm] 3 alloc FunTable");
+    Log::debug(format_args!("[init_vm] 3 alloc FunTable"));
     let fun_table_layout = Layout::array::<BoyiaFunction>(NUM_FUNC).unwrap();
     vm.mFunTable = alloc_zeroed(fun_table_layout) as *mut BoyiaFunction;
     if vm.mFunTable.is_null() {
@@ -490,7 +491,7 @@ pub unsafe fn init_vm_boxed(creator: *mut dyn Runtime) -> Option<Box<BoyiaVM>> {
         return None;
     }
 
-    eprintln!("[init_vm] 4 init Cpu");
+    Log::debug(format_args!("[init_vm] 4 init Cpu"));
     vm.mCpu.mReg0 = BoyiaValue {
         mNameKey: 0,
         mValueType: ValueType::BY_ARG,
@@ -501,11 +502,11 @@ pub unsafe fn init_vm_boxed(creator: *mut dyn Runtime) -> Option<Box<BoyiaVM>> {
         mValueType: ValueType::BY_ARG,
         mValue: RealValue { mIntVal: 0 },
     };
-    eprintln!("[init_vm] 4b cpu inited");
+    Log::debug(format_args!("[init_vm] 4b cpu inited"));
 
-    eprintln!("[init_vm] 5 init embedded tables (VMCode/StrTable/Entry)");
+    Log::debug(format_args!("[init_vm] 5 init embedded tables (VMCode/StrTable/Entry)"));
 
-    eprintln!("[init_vm] 6 alloc ExecState");
+    Log::debug(format_args!("[init_vm] 6 alloc ExecState"));
     vm.mEStateCache = create_exec_state_cache();
     if vm.mEStateCache.is_null() {
         init_vm_abort(vm_ptr, InitVmStage::CpuOk);
@@ -518,7 +519,7 @@ pub unsafe fn init_vm_boxed(creator: *mut dyn Runtime) -> Option<Box<BoyiaVM>> {
     }
     switch_exec_state(vm.mEState, vm);
 
-    eprintln!("[init_vm] 9 alloc TaskQueue");
+    Log::debug(format_args!("[init_vm] 9 alloc TaskQueue"));
     let task_queue_layout = Layout::new::<MicroTaskQueue>();
     vm.mTaskQueue = alloc_zeroed(task_queue_layout) as *mut MicroTaskQueue;
     if vm.mTaskQueue.is_null() {
@@ -534,7 +535,7 @@ pub unsafe fn init_vm_boxed(creator: *mut dyn Runtime) -> Option<Box<BoyiaVM>> {
         init_vm_abort(vm_ptr, InitVmStage::TaskQueueShell);
         return None;
     }
-    eprintln!("[init_vm] 10 done");
+    Log::debug(format_args!("[init_vm] 10 done"));
     Some(Box::from_raw(vm_ptr))
 }
 
@@ -625,7 +626,7 @@ pub unsafe fn load_entry_table(buffer: *mut LVoid, size: LInt, vm: &mut BoyiaVM)
 // ---------------------------------------------------------------------------
 
 pub(crate) unsafe fn find_global(key: LUintPtr, vm: &mut BoyiaVM) -> *mut BoyiaValue {
-    println!("[find_global] key={}", key);
+    Log::debug(format_args!("[find_global] key={}", key));
     if vm.mGlobals.is_null() {
         return ptr::null_mut();
     }
@@ -639,7 +640,7 @@ pub(crate) unsafe fn find_global(key: LUintPtr, vm: &mut BoyiaVM) -> *mut BoyiaV
         return val;
     }
 
-    println!("[find_global] key={} get nullptr", key);
+    Log::debug(format_args!("[find_global] key={} get nullptr", key));
     ptr::null_mut()
 }
 
@@ -668,44 +669,44 @@ fn is_object_prop_func(type_: ValueType) -> bool {
 }
 
 pub(crate) unsafe fn init_function(fun: *mut BoyiaFunction, vm: &mut BoyiaVM) {
-    eprintln!("[init_function] fun={:?}", fun);
+    Log::debug(format_args!("[init_function] fun={:?}", fun));
     if fun.is_null() {
-        eprintln!("[init_function] null arg");
+        Log::error(format_args!("[init_function] null arg"));
         return;
     }
     (*fun).mParamSize = 0;
     (*fun).mCaptureCount = 0;
     let creator = vm.mCreator;
     if creator.is_null() {
-        eprintln!("[init_function] ERROR mCreator null");
+        Log::error(format_args!("[init_function] ERROR mCreator null"));
         return;
     }
     let params_size = (NUM_FUNC_PARAMS as usize) * mem::size_of::<BoyiaValue>();
     (*fun).mParams = runtime_new_data_zeroed(creator, params_size as LInt) as *mut BoyiaValue;
-    eprintln!("[init_function] mParams={:?}", (*fun).mParams);
+    Log::debug(format_args!("[init_function] mParams={:?}", (*fun).mParams));
     if (*fun).mParams.is_null() {
-        eprintln!("[init_function] ERROR mParams alloc null");
+        Log::error(format_args!("[init_function] ERROR mParams alloc null"));
         return;
     }
     (*fun).mParamCount = NUM_FUNC_PARAMS as LInt;
     vm.mFunSize += 1;
-    eprintln!("[init_function] done mFunSize={}", vm.mFunSize);
+    Log::debug(format_args!("[init_function] done mFunSize={}", vm.mFunSize));
 }
 
 pub(crate) unsafe fn create_fun_val(hash_key: LUintPtr, type_: ValueType, vm: &mut BoyiaVM) -> *mut BoyiaValue {
-    eprintln!("[create_fun_val] key={} type={} mGValSize={} mFunSize={}", hash_key, type_ as u8, vm.mGValSize, vm.mFunSize);
+    Log::debug(format_args!("[create_fun_val] key={} type={} mGValSize={} mFunSize={}", hash_key, type_ as u8, vm.mGValSize, vm.mFunSize));
     if vm.mGlobals.is_null() || vm.mFunTable.is_null() {
-        eprintln!("[create_fun_val] null vm/globals/fun_table");
+        Log::error(format_args!("[create_fun_val] null vm/globals/fun_table"));
         return ptr::null_mut();
     }
     if vm.mGValSize as usize >= NUM_GLOBAL_VARS || vm.mFunSize as usize >= NUM_FUNC {
-        eprintln!("[create_fun_val] capacity full");
+        Log::error(format_args!("[create_fun_val] capacity full"));
         return ptr::null_mut();
     }
     let val = vm.mGlobals.add(vm.mGValSize as usize);
     vm.mGValSize += 1;
     let fun = vm.mFunTable.add(vm.mFunSize as usize);
-    eprintln!("[create_fun_val] val={:?} fun={:?} type={:?} hash_key={:?}", val, fun, type_ as u8, hash_key);
+    Log::debug(format_args!("[create_fun_val] val={:?} fun={:?} type={:?} hash_key={:?}", val, fun, type_ as u8, hash_key));
     (*val).mValueType = type_;
     (*val).mNameKey = hash_key;
     (*val).mValue.mObj.mPtr = fun as LIntPtr;
@@ -714,7 +715,7 @@ pub(crate) unsafe fn create_fun_val(hash_key: LUintPtr, type_: ValueType, vm: &m
         (*fun).mFuncBody = val as LIntPtr;
     }
     init_function(fun, vm);
-    eprintln!("[create_fun_val] done");
+    Log::debug(format_args!("[create_fun_val] done"));
     val
 }
 
@@ -787,34 +788,34 @@ pub unsafe fn compile_code(code: *mut LInt8, vm: &mut BoyiaVM) {
 
 /// Create object from local 0 class; set reg0.
 pub unsafe fn create_object(vm: &mut BoyiaVM) -> LInt {
-    eprintln!("[create_object] called");
+    Log::debug(format_args!("[create_object] called"));
     let value = get_local_value(0, vm) as *mut BoyiaValue;
     if value.is_null() {
-        eprintln!("[create_object] -> kOpResultEnd (local 0 null)");
+        Log::warn(format_args!("[create_object] -> kOpResultEnd (local 0 null)"));
         return OpHandleResult::kOpResultEnd as i32;
     }
     let value_type = (*value).mValueType;
     let class_name_key = (*value).mNameKey;
-    eprintln!(
+    Log::debug(format_args!(
         "[create_object] class: local0 ptr={:?}, mValueType={} (BY_CLASS=13), mNameKey={}",
         value, value_type as u8, class_name_key
-    );
+    ));
     if value_type != ValueType::BY_CLASS {
-        eprintln!("[create_object] -> kOpResultEnd (local 0 not BY_CLASS)");
+        Log::warn(format_args!("[create_object] -> kOpResultEnd (local 0 not BY_CLASS)"));
         return OpHandleResult::kOpResultEnd as i32;
     }
     value_copy(&mut vm.mCpu.mReg0, value);
     let new_func = copy_function(value, NUM_FUNC_PARAMS as LInt, vm);
     if new_func.is_null() {
-        eprintln!("[create_object] -> kOpResultEnd (copy_function returned null)");
+        Log::warn(format_args!("[create_object] -> kOpResultEnd (copy_function returned null)"));
         return OpHandleResult::kOpResultEnd as i32;
     }
     vm.mCpu.mReg0.mValue.mObj.mPtr = new_func as LIntPtr;
     vm.mCpu.mReg0.mValue.mObj.mSuper = (*value).mValue.mObj.mSuper;
-    eprintln!(
+    Log::debug(format_args!(
         "[create_object] -> kOpResultSuccess (instance ptr={:?}, class key={})",
         new_func, class_name_key
-    );
+    ));
 
     let rt = get_runtime_from_vm(vm);
     if rt.is_null() {
@@ -921,7 +922,7 @@ pub unsafe fn native_call_impl(
     let current = (*vm).mEState;
     // 第一个参数为调用该函数的函数指针
     let value = args.add(0);
-    eprintln!("[native_call_impl] HandlePushParams functionName={}", (*value).mValueType as u8);
+    Log::debug(format_args!("[native_call_impl] HandlePushParams functionName={}", (*value).mValueType as u8));
     let state = create_exec_state(vm);
     if state.is_null() {
         return OpHandleResult::kOpResultEnd;
@@ -1018,9 +1019,9 @@ pub unsafe fn name_for_identifier(vm: &mut BoyiaVM, id: LUintPtr) -> Option<Stri
 
 /// Create global class value.
 pub unsafe fn create_global_class(key: LUintPtr, vm: &mut BoyiaVM) -> *mut LVoid {
-    eprintln!("[create_global_class] key={}", key);
+    Log::debug(format_args!("[create_global_class] key={}", key));
     let val = create_fun_val(key, ValueType::BY_CLASS, vm) as *mut LVoid;
-    eprintln!("[create_global_class] done val={:?}", val);
+    Log::debug(format_args!("[create_global_class] done val={:?}", val));
     val
 }
 
@@ -1041,7 +1042,7 @@ pub(crate) unsafe fn create_micro_task_object(vm: &mut BoyiaVM) -> *mut BoyiaFun
 /// Allocate a function slot for a builtin method (mFuncBody = native_ptr). Returns null if no slot.
 pub unsafe fn alloc_builtin_function(vm: &mut BoyiaVM, native_ptr: NativePtr) -> *mut BoyiaFunction {
     if (*vm).mFunSize as usize >= NUM_FUNC {
-        eprintln!("[alloc_builtin_function] mFunSize full {}", (*vm).mFunSize);
+        Log::error(format_args!("[alloc_builtin_function] mFunSize full {}", (*vm).mFunSize));
         return ptr::null_mut();
     }
     let fun = vm.mFunTable.add(vm.mFunSize as usize);
@@ -1150,7 +1151,7 @@ pub unsafe fn compare_value(src: *const BoyiaValue, dest: *const BoyiaValue) -> 
                 return false;
             }
 
-            println!("call compare_value");
+            Log::debug(format_args!("call compare_value"));
             let a = get_string_buffer(src);
             let b = get_string_buffer(dest);
             if a.is_null() || b.is_null() {
@@ -1369,7 +1370,7 @@ pub unsafe fn create_native_string(value: *mut BoyiaValue, buffer: *mut LInt8, l
     }
     let obj_body = create_string_object(buffer, len, vm);
     if obj_body.is_null() {
-        println!("create_native_string obj_body is null");
+        Log::debug(format_args!("create_native_string obj_body is null"));
         return;
     }
     (*value).mValueType = ValueType::BY_CLASS;
@@ -1494,7 +1495,7 @@ pub unsafe fn resume_micro_task(
         value_copy_no_name(&mut (*task).mResult, value);
     }
 
-    println!("call resume_micro_task");
+    Log::debug(format_args!("call resume_micro_task"));
     add_micro_task(task, vm);
 }
 

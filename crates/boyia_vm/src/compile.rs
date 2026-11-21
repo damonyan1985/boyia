@@ -7,6 +7,7 @@
 
 use crate::core::get_runtime_from_vm;
 use crate::types::*;
+use crate::Log;
 use std::ptr;
 
 const MAX_IDENT_LEN: usize = 256;
@@ -32,7 +33,7 @@ unsafe fn sntx_error_build(err: SntxError, cs: &CompileState) {
         SntxError::LptrExpected => "'(' expected",
         SntxError::RptrExpected => "')' expected",
     };
-    eprintln!("syntax error (line {}): {}", line, msg);
+    Log::error(format_args!("syntax error (line {}): {}", line, msg));
 }
 
 fn hash_ident(s: &[u8]) -> LUintPtr {
@@ -734,7 +735,7 @@ unsafe fn compile_var_operand(cs: &mut CompileState, key: LUintPtr) -> OpCommand
         }
         if fs.mIsAnonym {
             if let Some(i) = fs.mCaptures.iter().position(|&k| k == key) {
-                println!("get capture idx: {}", i);
+                Log::debug(format_args!("get capture idx: {}", i));
                 return OpCommand::op_capture(i as LIntPtr);
             }
         }
@@ -786,7 +787,7 @@ unsafe fn parse_compile_args(cs: &mut CompileState) -> CompileArgs {
     let mut args = CompileArgs::new(cs.mVm as *mut BoyiaVM);
     next_token(cs); // expect '('
     if cs.mToken.mTokenValue != TokenValue::LPTR {
-        eprintln!("compile function: expected '('");
+        Log::error(format_args!("compile function: expected '('"));
         return args;
     }
     loop {
@@ -801,10 +802,10 @@ unsafe fn parse_compile_args(cs: &mut CompileState) -> CompileArgs {
             TokenType::IDENTIFIER => match token_name_slice(cs) {
                 b"true" => args.push(CompileArg::Bool(true)),
                 b"false" => args.push(CompileArg::Bool(false)),
-                _ => eprintln!("compile function: unsupported identifier argument (literal expected)"),
+                _ => Log::error(format_args!("compile function: unsupported identifier argument (literal expected)")),
             },
             _ => {
-                eprintln!("compile function: unsupported argument (literal expected)");
+                Log::error(format_args!("compile function: unsupported argument (literal expected)"));
             }
         }
         next_token(cs);
@@ -1161,12 +1162,12 @@ unsafe fn eval_assignment(cs: &mut CompileState) {
 /// parent function params + all parent local scopes' locals.
 unsafe fn collect_parent_scope_captures_for_anonym(cs: &mut CompileState) {
     let scope_len = cs.mFunctionScopes.len();
-    println!("call collect_parent_scope_captures_for_anonym scope_len={}", scope_len);
+    Log::debug(format_args!("call collect_parent_scope_captures_for_anonym scope_len={}", scope_len));
     if scope_len < 2 {
         return;
     }
 
-    println!("call collect_parent_scope_captures_for_anonym");
+    Log::debug(format_args!("call collect_parent_scope_captures_for_anonym"));
     let parent_idx = scope_len - 2;
     // rust编译器升级之后，不能直接使用原始指针获取mFunctionScopes了，而必须加&来借用，
     // 这是因为，新的编译器加入了dangerous_implicit_autorefs的缘故，也可以给函数标注宏
@@ -1636,7 +1637,7 @@ unsafe fn dump_compiled_opcodes(cs: &mut CompileState) {
         } else {
             n_after_last_call_native += 1;
         }
-        eprintln!("  [{}] {:?}", n, op);
+        Log::debug(format_args!("  [{}] {:?}", n, op));
         n += 1;
         let next_idx = inst.mNext;
         if next_idx == kInvalidInstruction {
@@ -1644,7 +1645,7 @@ unsafe fn dump_compiled_opcodes(cs: &mut CompileState) {
         }
         pc_idx = next_idx;
     }
-    eprintln!("[compile] total instructions={}, kCmdCallNative count={}, instructions after last kCmdCallNative={}", n, n_call_native, n_after_last_call_native);
+    Log::debug(format_args!("[compile] total instructions={}, kCmdCallNative count={}, instructions after last kCmdCallNative={}", n, n_call_native, n_after_last_call_native));
 }
 
 /// Full compile: parse source, emit all instructions, register globals, append entry.
@@ -1658,3 +1659,4 @@ pub(crate) unsafe fn parse_and_register(code: *mut LInt8, vm: &mut BoyiaVM) {
         dump_compiled_opcodes(&mut cs);
     }
 }
+

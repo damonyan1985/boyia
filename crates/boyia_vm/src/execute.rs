@@ -16,6 +16,7 @@ use crate::inlinecache::{
     add_fun_inline_cache, add_prop_inline_cache, create_inline_cache, get_inline_cache,
 };
 use crate::types::*;
+use crate::Log;
 use std::alloc::{alloc, Layout};
 use std::ptr;
 
@@ -39,7 +40,7 @@ pub enum OpSide {
 /// Order: (1) obj scope (this/super per BuiltinId), (2) local variables, (3) global vars, (4) FindObjProp on mClass.
 #[inline]
 unsafe fn get_val(key: LUintPtr, vm: &mut BoyiaVM) -> *mut BoyiaValue {
-    println!("[get_val] key={}", key);
+    Log::debug(format_args!("[get_val] key={}", key));
     if vm.mEState.is_null() {
         return ptr::null_mut();
     }
@@ -113,7 +114,7 @@ unsafe fn get_capture_ptr(vm: &mut BoyiaVM, capture_idx: LIntPtr) -> *mut BoyiaV
         return ptr::null_mut();
     }
     let cc = (*fun).mCaptureCount as LIntPtr;
-    println!("get capture count: {}", cc);
+    Log::debug(format_args!("get capture count: {}", cc));
     if capture_idx < 0 || capture_idx >= cc {
         return ptr::null_mut();
     }
@@ -700,7 +701,7 @@ unsafe fn handle_push_arg(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleR
         }
         /* mCaptureCount == 0: template from mFunTable; clone then capture (BoyiaCore.cpp HandlePushArg). */
         if (*src_fun).mCaptureCount == 0 {
-            println!("handle_push_arg mCaptureCount==0");
+            Log::debug(format_args!("handle_push_arg mCaptureCount==0"));
             let fun = clone_anonym_boyia_function_for_push_arg(src_fun, vm);
             if fun.is_null() {
                 return OpHandleResult::kOpResultEnd;
@@ -725,7 +726,7 @@ unsafe fn handle_push_arg(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleR
             }
         }
     }
-    eprintln!("[handle_push_arg] value.mNameKey={}", (*value).mNameKey);
+    Log::debug(format_args!("[handle_push_arg] value.mNameKey={}", (*value).mNameKey));
     local_push(value, vm);
     OpHandleResult::kOpResultSuccess
 }
@@ -799,10 +800,10 @@ unsafe fn handle_assignment(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandl
             value_copy_with_key(left, val);
         }
         OpType::OP_CAPTURE => {
-            println!("get op capture");
+            Log::debug(format_args!("get op capture"));
             let val = get_capture_ptr(vm, (*inst).mOPRight.int_value());
             if val.is_null() {
-                println!("get op capture1");
+                Log::debug(format_args!("get op capture1"));
                 return OpHandleResult::kOpResultEnd;
             }
             value_copy_with_key(left, val);
@@ -988,7 +989,7 @@ unsafe fn find_obj_prop(
                     } else {
                         inst.mCache
                     };
-                    println!("[find_obj_prop] add inline cache");
+                    Log::debug(format_args!("[find_obj_prop] add inline cache"));
                     add_fun_inline_cache(cache, klass, result);
                 }
                 return result;
@@ -1081,13 +1082,13 @@ unsafe fn handle_push_params(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHand
 
 /// HandleCallAsyncFunction per BoyiaCore.cpp: create exec state, switch, push scene, copy params, AssignStateClass.
 unsafe fn handle_call_async_function(vm: &mut BoyiaVM) {
-    println!("call handle_call_async_function0");
+    Log::debug(format_args!("call handle_call_async_function0"));
     let current = vm.mEState;
     if current.is_null() || (*current).mFrameIndex <= 0 {
         return;
     }
 
-    println!("call handle_call_async_function1");
+    Log::debug(format_args!("call handle_call_async_function1"));
     let start = (*current)
         .mExecStack
         .as_ptr()
@@ -1104,7 +1105,7 @@ unsafe fn handle_call_async_function(vm: &mut BoyiaVM) {
         return;
     }
 
-    println!("call handle_call_async_function2");
+    Log::debug(format_args!("call handle_call_async_function2"));
     (*state).mLast = current;
     switch_exec_state(state, vm);
     let _ = handle_push_scene(None, vm);
@@ -1131,32 +1132,32 @@ unsafe fn handle_call_async_function(vm: &mut BoyiaVM) {
         },
     };
 
-    println!("call handle_call_async_function3");
+    Log::debug(format_args!("call handle_call_async_function3"));
     assign_state_class(vm.mEState, &val as *const BoyiaValue);
 }
 
 /// HandleCallFunction per BoyiaCore.cpp: localstack first value is function ptr; BY_NAV_FUNC/BY_NAV_PROP => LocalPush + navFun, return; BY_PROP_FUNC/BY_ANONYM_FUNC => AssignStateClass; BY_ASYNC_PROP => HandleCallAsyncFunction; BY_ASYNC => no-op; then set cmds/PC and return kOpResultJumpFun.
 unsafe fn handle_call_function(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResult {
-    println!("call handle_call_function0");
+    Log::debug(format_args!("call handle_call_function0"));
     let _ = inst;
     let e_state = (*vm).mEState;
     if e_state.is_null() || (*e_state).mFrameIndex <= 0 {
         return OpHandleResult::kOpResultEnd;
     }
-    println!("call handle_call_function1");
+    Log::debug(format_args!("call handle_call_function1"));
     let start = (*vm).mExecStack.add((*e_state).mFrameIndex as usize - 1).read().mLValSize;
     if start as usize >= crate::types::NUM_LOCAL_VARS {
         return OpHandleResult::kOpResultEnd;
     }
 
-    println!("call handle_call_function2");
+    Log::debug(format_args!("call handle_call_function2"));
     let value = (*vm).mLocals.add(start as usize);
     let func = (*value).mValue.mObj.mPtr as *mut BoyiaFunction;
     if func.is_null() {
         return OpHandleResult::kOpResultEnd;
     }
 
-    println!("call handle_call_function3");
+    Log::debug(format_args!("call handle_call_function3"));
     value_copy(&mut (*e_state).mFun, value);
     let value_type = (*value).mValueType;
     // 内置类产生的对象，调用其方法
@@ -1167,7 +1168,7 @@ unsafe fn handle_call_function(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHa
         return nav_fun(&mut *vm);
     }
 
-    println!("call handle_call_function4");
+    Log::debug(format_args!("call handle_call_function4"));
     if value_type == ValueType::BY_PROP_FUNC || value_type == ValueType::BY_ANONYM_FUNC {
         let obj_body = (*value).mValue.mObj.mSuper as *const BoyiaFunction;
         let val = BoyiaValue {
@@ -1182,7 +1183,7 @@ unsafe fn handle_call_function(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHa
         };
         assign_state_class(e_state, &val as *const BoyiaValue);
     } else if value_type == ValueType::BY_ASYNC_PROP {
-        println!("call handle_call_async_function");
+        Log::debug(format_args!("call handle_call_async_function"));
         handle_call_async_function(vm);
     } else if value_type == ValueType::BY_ASYNC {
         // no-op
@@ -1217,10 +1218,10 @@ unsafe fn handle_get_prop(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleR
     let rval = inst.mOPRight.int_value() as LUintPtr;
     let result = find_obj_prop(lval, rval, Some(inst), vm);
     if result.is_null() {
-        eprintln!(
+        Log::error(format_args!(
             "[handle_get_prop] find_obj_prop failed: lval type={}, rval(prop key)={}",
             (*lval).mValueType as u8, rval
-        );
+        ));
         return OpHandleResult::kOpResultEnd;
     }
     value_copy_with_key(&mut (*vm).mCpu.mReg0, result);
@@ -1246,7 +1247,7 @@ unsafe fn handle_assign_var(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandl
 
     let value: *mut BoyiaValue = (*left).mNameKey as *mut BoyiaValue;
 
-    println!("[handle_assign_var] value.mNameKey={}", (*value).mNameKey);
+    Log::debug(format_args!("[handle_assign_var] value.mNameKey={}", (*value).mNameKey));
     if value.is_null() {
         return OpHandleResult::kOpResultEnd;
     }
@@ -1262,7 +1263,7 @@ unsafe fn handle_create_class(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHan
     }
     let hash_key = (*inst).mOPLeft.int_value() as LUintPtr;
 
-    println!("[handle_create_class] called key = {}", hash_key);
+    Log::debug(format_args!("[handle_create_class] called key = {}", hash_key));
     let class_val = crate::core::create_fun_val(hash_key, ValueType::BY_CLASS, vm);
     if class_val.is_null() {
         return OpHandleResult::kOpResultEnd;
@@ -1316,10 +1317,10 @@ unsafe fn handle_fun_create(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandl
             });
             (*func).mParamSize += 1;
             init_function(slot, vm);
-            eprintln!(
+            Log::debug(format_args!(
                 "[class_func] add method key={} to class key={}, class mParamSize={}",
                 hash_key, class_key, (*func).mParamSize
-            );
+            ));
             return OpHandleResult::kOpResultSuccess;
         }
 
@@ -1514,7 +1515,7 @@ unsafe fn handle_await(inst: &mut Instruction, vm: &mut BoyiaVM) -> OpHandleResu
         return OpHandleResult::kOpResultEnd;
     }
     let task = (*fun).mParams.add(1).read().mValue.mIntVal as *mut MicroTask;
-    println!("call handle_await");
+    Log::debug(format_args!("call handle_await"));
     (*task).mAsyncEs = e_state;
     if (*e_state).mTopTask.is_null() {
         let top_task = alloc_micro_task(vm);
@@ -1587,17 +1588,17 @@ unsafe fn handle_cmd_end(_inst: &mut Instruction, _vm: &mut BoyiaVM) -> OpHandle
 
 /// Execute instructions until PC is null or handler returns kOpResultEnd. Internal only; use execute_code / execute_global_code.
 pub(crate) unsafe fn exec_instruction(vm: &mut BoyiaVM) {
-    eprintln!("[exec_instruction] enter");
+    Log::debug(format_args!("[exec_instruction] enter"));
     if vm.mEState.is_null() {
         return;
     }
     let mut e_state = vm.mEState;
-    eprintln!("[exec_instruction] pc={:?}", (*e_state).mStackFrame.mPC);
+    Log::debug(format_args!("[exec_instruction] pc={:?}", (*e_state).mStackFrame.mPC));
     if !pc_is_valid((*e_state).mStackFrame.mPC) {
         exec_pop_function(vm);
         return;
     }
-    eprintln!("[exec_instruction] dispatching first inst");
+    Log::debug(format_args!("[exec_instruction] dispatching first inst"));
     while pc_is_valid((*e_state).mStackFrame.mPC) {
         let pc = (*e_state).mStackFrame.mPC;
         let result = dispatch_instruction_at(pc, vm);
@@ -1620,13 +1621,13 @@ pub(crate) unsafe fn exec_instruction(vm: &mut BoyiaVM) {
 
 /// Execute global code: for each entry, set mContext and run execute_code. Match ExecuteGlobalCode in BoyiaCore.cpp.
 pub unsafe fn execute_global_code(vm: &mut BoyiaVM) {
-    eprintln!("[execute_global_code] enter");
+    Log::debug(format_args!("[execute_global_code] enter"));
     if vm.mEState.is_null() || vm.mEntry.is_empty() || vm.vm_code().is_empty() {
-        eprintln!("[execute_global_code] early return null");
+        Log::debug(format_args!("[execute_global_code] early return null"));
         return;
     }
     let size = vm.entry_len();
-    eprintln!("[execute_global_code] entry size={}", size);
+    Log::debug(format_args!("[execute_global_code] entry size={}", size));
     execute_entry_range(vm, 0, size);
 }
 
@@ -1654,20 +1655,21 @@ pub unsafe fn execute_entry_range(vm: &mut BoyiaVM, start: usize, end: usize) {
 
 /// Execute code for current mStackFrame.mContext (set by caller). Resets scene after.
 pub unsafe fn execute_code(vm: &mut BoyiaVM) {
-    eprintln!("[execute_code] enter");
+    Log::debug(format_args!("[execute_code] enter"));
     if vm.mEState.is_null() {
         return;
     }
     let e_state = vm.mEState;
     let ctx = (*e_state).mStackFrame.mContext;
-    eprintln!("[execute_code] ctx={:?}", ctx);
+    Log::debug(format_args!("[execute_code] ctx={:?}", ctx));
     if ctx.is_null() {
         return;
     }
     let begin = (*ctx).mBegin;
-    eprintln!("[execute_code] mBegin={:?}", begin);
+    Log::debug(format_args!("[execute_code] mBegin={:?}", begin));
     (*e_state).mStackFrame.mPC = begin;
-    eprintln!("[execute_code] calling exec_instruction");
+    Log::debug(format_args!("[execute_code] calling exec_instruction"));
     exec_instruction(vm);
     reset_scene(vm.mEState);
 }
+
